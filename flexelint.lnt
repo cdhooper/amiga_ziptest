@@ -1,0 +1,22 @@
+-t4                        // 4-space tabs
+
++libh(stdio.h)
++libh(stdlib.h)
++d__stkargs=
+
+-e537              // Repeated include file
+-e750              // Local macro not referenced
+-e801              // Use of goto is deprecated
+-e834              // Operator '-' followed by operator '-' is confusing.
+
+-esym(534,printf,fflush,fputc,memset,memcpy)  // Ignoring return value of function
+-esym(683,clearerr,feof,ferror,getc,putc)  // function #define, semantics may be lost
+-esym(762,strtod,strtol,strtoul)  // Redundantly declared symbol
+
+// Program-specific
+-esym(534,CacheControl)   // Ignoring return value of function
+-esym(550,dummy)          // Symbol not accessed
+-esym(714,c_main)         // Symbol not referenced
+-efunc(611,c_main)        // Suspicious cast
+-esym(818,argv)           // Could be declared as pointing to const
+-efunc(64,enforcer_check) // Type mismatch ptrs to signed/unsigned

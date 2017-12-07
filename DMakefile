@@ -1,0 +1,48 @@
+#
+# Build ziptest using DICE C compiler version 3.15
+#
+
+PROG=ziptest
+DIR=ZIPTest
+OBJDIR=objs
+SRCS=ziptest.c stack.asm
+OBJS=$(SRCS:"*.c":"$(OBJDIR)/*.o") $(SRCS:"*.asm":"$(OBJDIR)/*.o")
+CC=dcc
+ASM=das
+CFLAGS=-O2 -chip -r -ms -mc -md -2.x -// -proto
+LFLAGS=-O2 -chip -r -ms -mc -md
+# Notes:
+#       -chip  forces all hunks in chip memory.
+#              This is required because the program should not run from
+#              the same fast memory that it is testing.
+#       -r     makes the code residentable (pure)
+#              Note that this can't be used if there are read-write globals
+#              because DICE c.a startup code does an AllocMem() with
+#              attributes 0 (Any memory is okay).  This is not okay because
+#              our memory under test might get allocated to the globals.
+#       -ms    forces read-only data to code segment
+#       -mc    is small code model (default)
+#       -md    is small data model (default)
+#       -2.x   picks up AmigaOS 2.x headers
+#       -proto does stricter function prototype checking
+#       -//    will enable C++ style comments (not currently used)
+
+$(PROG): $(OBJS) DMakefile
+	$(CC) $(LFLAGS) %(right:*.o) -o %(left)
+
+$(OBJDIR): $(OBJDIR)
+	makedir %(left)
+
+$(OBJDIR)/ziptest.o: ziptest.c $(OBJDIR) DMakefile
+	$(CC) $(CFLAGS) -c %(right:*.c) -o %(left)
+
+$(OBJDIR)/stack.o: stack.asm DMakefile
+	$(ASM) %(right:*.asm) -o %(left)
+
+clean:
+	delete $(PROG) $(OBJS) $(OBJDIR)
+
+release:
+	cd /
+	delete $(DIR)/$(DIR).lha
+	lha a -r $(DIR)/$(DIR).lha $(DIR)/$(PROG).readme $(DIR)/$(PROG) $(DIR)/ziptest.c $(DIR)/stack.asm $(DIR)/DMakefile $(DIR)/compile_vbcc $(DIR)/vbcc_config

@@ -1,0 +1,4 @@
+; This script will build ziptest using the current (September 2017) version
+; of vbcc.  The vbcc_config file contains other required options.
+
+vc -sc -v -lamiga -+ -Iinclude:amiga20 ziptest.c stack.asm -o ziptest +vbcc_config

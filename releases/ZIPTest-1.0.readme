@@ -1,0 +1,516 @@
+Short:        Utility to test Amiga 3000 ZIP DRAM memory chips
+Author:       amiga@cdh.eebugs.com (Chris Hooper)
+Uploader:     amiga at cdh dot eebugs dot com (Chris Hooper)
+Type:         util/misc
+Version:      1.0
+Architecture: m68k-amigaos
+Distribution: Aminet
+License:      Freeware with full source
+Date:         2018-12-06 (Wednesday, December 6, 2017)
+
+ZIPTest is a command line utility to test ZIP fast memory installed in an
+Amiga 3000.  It will only function correctly in an Amiga 3000 (and possibly
+the Amiga 3000T), and may crash when run on other computers.
+
+The utility is designed to diagnose ZIP memory regardless of whether there
+are defective chips (which would prevents AmigaOS from using that memory).
+This is achieved by accessing the physical addresses where the memory is
+mapped by Ramsey.  The program should be useful for diagnosing bad
+connections to individual ZIP ICs or individual bad cells within those ZIP
+ICs.  In order to operate on memory where some or all may have been detected
+and put in the freelist by AmigaOS at startup, the program is designed to
+run from chip memory.  It carefully does all accesses with interrupts
+disabled and restores memory contents after testing.  If you are a
+developer, you will need to disable Enforcer or equivalent (MuForce) before
+using this utility.  This is because it potentially accesses CPU physical
+addresses which may not have been added to the memory list.
+
+
+DISCLAIMER: THE SOFTWARE IS PROVIDED "AS-IS", WITHOUT ANY WARRANTY.
+THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
+OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
+
+
+The motivation for writing the utility started with me receiving an Amiga
+which had been stored in a basement for the past 21 years.  After re-capping
+and debugging other board issues, I saw that none of the fast memory
+was being recognized.  Not having much luck with swapping around ZIP
+ICs, I started poking at the CPU's physical addresses where the memory
+should appear and found nibbles in each bank which were not functional.
+The process was not very difficult, but did require a significant amount
+of time to research how the ZIP ICs were mapped into memory.  I decided to
+share my experience by writing a utility which others could use to diagnose
+problems with their Amiga ZIP memory.
+
+The utility implements three main tests:
+1) Data line test
+2) Address line test
+3) Memory cell test
+
+If started without arguments, ZIPTest will run all three of these tests
+in sequence.  If the data line test fails a particular ZIP IC, then you
+should not rely on results of the address line test for that IC.  If either
+the data line test or the address line test fails a particular ZIP IC, then
+the memory cell test will also likely fail for that chip.
+
+=============================================================================
+Example test output from a fully working Amiga 3000 with 16MB Fast Memory:
+
+1> ziptest
+ZipTest 1.0 (Dec 06 2017) by Chris Hooper
+
+Memory config: 1Mx4 (4096KB per bank) Static Column (MSM514402, etc)
+Memory refresh: 238 clocks (9.52 usec)
+Data line test
+  Socket   ADDR    IO1  IO2  IO3  IO4   Socket   ADDR    IO1  IO2  IO3  IO4
+  -------- ------- ---- ---- ---- ----  -------- ------- ---- ---- ---- ----
+  U881 3.7 71ffffb Good Good Good Good  U879 3.5 71ffffa Good Good Good Good
+  U873 2.7 75ffffb Good Good Good Good  U871 2.5 75ffffa Good Good Good Good
+  U865 1.7 79ffffb Good Good Good Good  U863 1.5 79ffffa Good Good Good Good
+  U857 0.7 7dffffb Good Good Good Good  U855 0.5 7dffffa Good Good Good Good
+  U880 3.6 71ffffb Good Good Good Good  U878 3.4 71ffffa Good Good Good Good
+  U872 2.6 75ffffb Good Good Good Good  U870 2.4 75ffffa Good Good Good Good
+  U864 1.6 79ffffb Good Good Good Good  U862 1.4 79ffffa Good Good Good Good
+  U856 0.6 7dffffb Good Good Good Good  U854 0.4 7dffffa Good Good Good Good
+  U877 3.3 71ffff9 Good Good Good Good  U875 3.1 71ffff8 Good Good Good Good
+  U869 2.3 75ffff9 Good Good Good Good  U867 2.1 75ffff8 Good Good Good Good
+  U861 1.3 79ffff9 Good Good Good Good  U859 1.1 79ffff8 Good Good Good Good
+  U853 0.3 7dffff9 Good Good Good Good  U851 0.1 7dffff8 Good Good Good Good
+  U876 3.2 71ffff9 Good Good Good Good  U874 3.0 71ffff8 Good Good Good Good
+  U868 2.2 75ffff9 Good Good Good Good  U866 2.0 75ffff8 Good Good Good Good
+  U860 1.2 79ffff9 Good Good Good Good  U858 1.0 79ffff8 Good Good Good Good
+  U852 0.2 7dffff9 Good Good Good Good  U850 0.0 7dffff8 Good Good Good Good
+
+Address line test
+  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0
+  -------- -- -- -- -- -- -- -- -- -- --  -------- -- -- -- -- -- -- -- -- -- --
+  U881 3.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U879 3.5 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U873 2.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U871 2.5 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U865 1.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U863 1.5 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U857 0.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U855 0.5 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U880 3.6 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U878 3.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U872 2.6 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U870 2.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U864 1.6 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U862 1.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U856 0.6 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U854 0.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U877 3.3 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U875 3.1 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U869 2.3 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U867 2.1 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U861 1.3 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U859 1.1 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U853 0.3 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U851 0.1 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U876 3.2 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U874 3.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U868 2.2 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U866 2.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U860 1.2 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U858 1.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U852 0.2 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U850 0.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+
+Memory cell test
+  ................ ................ ................ ................
+  Socket   Result   Socket   Result
+  -------- ------   -------- ------
+  U881 3.7 Good     U879 3.5 Good
+  U873 2.7 Good     U871 2.5 Good
+  U865 1.7 Good     U863 1.5 Good
+  U857 0.7 Good     U855 0.5 Good
+  U880 3.6 Good     U878 3.4 Good
+  U872 2.6 Good     U870 2.4 Good
+  U864 1.6 Good     U862 1.4 Good
+  U856 0.6 Good     U854 0.4 Good
+  U877 3.3 Good     U875 3.1 Good
+  U869 2.3 Good     U867 2.1 Good
+  U861 1.3 Good     U859 1.1 Good
+  U853 0.3 Good     U851 0.1 Good
+  U876 3.2 Good     U874 3.0 Good
+  U868 2.2 Good     U866 2.0 Good
+  U860 1.2 Good     U858 1.0 Good
+  U852 0.2 Good     U850 0.0 Good
+
+=============================================================================
+
+Data line test
+--------------
+The Data line test walks all four data lines (IO1, IO2, IO3, and IO4)
+of each ZIP, and verifies that each line is connected and that writes to
+the chip can retain contents.  Output from this test is a table in the
+same order as the ZIP ICs are populated on the Amiga 3000 motherboard -
+the top is toward the connectors and bottom toward the CPU expansion socket.
+
+A result of "Good" means that the data line is functioning correctly.
+A result of "?" means that am indeterminate value is always read from that
+data line (sometimes 0 and sometimes 1).  This could be due to a detective
+or missing part.  A "1" means that a 1 value is consistently read, and a
+"0" means that a 0 value is consistently read.  Unless you are diagnosing
+at the board level, anything other than "Good" means that you need to either
+re-seat or replace the entire ZIP IC.
+
+Example data line test output:
+
+1> ziptest data 
+Memory config: 1Mx4 (4Mb) Static Column (MSM514402, etc)
+Memory refresh: 154 clocks (6.16 usec)
+  Socket   ADDR    IO1  IO2  IO3  IO4   Socket   ADDR    IO1  IO2  IO3  IO4 
+  -------- ------- ---- ---- ---- ----  -------- ------- ---- ---- ---- ----
+  U881 3.7 71fffff Good Good Good Good  U879 3.5 71ffffe ?    ?    ?    ?   
+  U873 2.7 75fffff ?    1    ?    ?     U871 2.5 75ffffe ?    ?    ?    ?   
+  U865 1.7 79fffff ?    1    ?    ?     U863 1.5 79ffffe ?    ?    ?    ?   
+  U857 0.7 7dfffff Good Good Good Good  U855 0.5 7dffffe Good Good Good Good
+  U880 3.6 71fffff Good Good Good Good  U878 3.4 71ffffe Good Good Good Good
+  U872 2.6 75fffff 1    ?    ?    ?     U870 2.4 75ffffe 1    ?    1    ?   
+  U864 1.6 79fffff ?    ?    ?    ?     U862 1.4 79ffffe 1    ?    1    ?   
+  U856 0.6 7dfffff Good Good Good Good  U854 0.4 7dffffe Good Good Good Good
+  U877 3.3 71ffffd ?    ?    1    ?     U875 3.1 71ffffc 1    1    1    1   
+  U869 2.3 75ffffd 1    1    1    1     U867 2.1 75ffffc 1    1    1    1   
+  U861 1.3 79ffffd 1    1    1    ?     U859 1.1 79ffffc 1    1    1    1   
+  U853 0.3 7dffffd Good Good Good Good  U851 0.1 7dffffc Good Good Good Good
+  U876 3.2 71ffffd 1    1    1    1     U874 3.0 71ffffc 1    1    1    1   
+  U868 2.2 75ffffd 1    1    1    1     U866 2.0 75ffffc Good Good Good Good
+  U860 1.2 79ffffd ?    Good ?    Good  U858 1.0 79ffffc 1    1    1    1   
+  U852 0.2 7dffffd Good Good Good Good  U850 0.0 7dffffc Good Good Good Good
+
+Comparing the above table against readily available Amiga 3000 ZIP memory
+installation hints on the internet, one can quickly decide this configuration
+is not going to work so well.  Only "Bank 0" of ZIP memory might be usable
+by the operating system.  Note that for the example above, not all ZIP
+ICs were installed.  One ZIP is defective, and another has an address pin
+purposely stuffed in the wrong pin socket (to inject a fault).
+
+The Amiga memory addresses above may look unusual.  These addresses are
+chosen because there isn't a simple mapping between the Amiga memory address
+and the Ramsey assertion of the RAS and CAS address lines.  There is a table
+in the comments of ziptest.c which documents the mapping that I observed
+when probing with a logic analyzer against power-of-two addresses.  Simply
+stated, the address lines A1 through A9 are inverted from the CPU's physical
+memory address.  In 1Mx4 mode, the RAS lines A0 through A9 are also rolled
+one to the right from the CPU's physical memory address.
+
+
+=============================================================================
+
+Address line test
+-----------------
+The address line test performs a modified walking zero's and walking one's
+test on the address lines connected to the ZIP memory.  The test is designed
+to detect shorted or floating address lines by walking adjacent address lines,
+checking if writes land at the wrong memory address.  The test can't detect
+all possible address line-to-line shorts, but does a good job in the general
+case of a line shorted to an adjacent line or one which is not connected.
+
+At each address line being tested, address lines immediately below and
+above are also used to pattern and test.  For example, if A4 is being
+tested, then A5, A4, and A3 will be walked with 000, 001, 010, 011, 100,
+101, 110, and 111 values, while the other address lines (A0-A2 and A6-A9)
+will all be held either at 1 or at 0.
+
+Note that due to the nature of the address test, some address lines may be
+indicated as questionable around others which are bad.  For example, view the
+report for U880 below, which has its A8 pin stuffed in the same socket as A9:
+
+1> ziptest addr 
+Memory config: 1Mx4 (4Mb) Static Column (MSM514402, etc)
+Memory refresh: 154 clocks (6.16 usec)
+  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0
+  -------- -- -- -- -- -- -- -- -- -- --  -------- -- -- -- -- -- -- -- -- -- --
+  U881 3.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U879 3.5 !  !  !  !  !  !  !  !  !  ! 
+  U873 2.7 !  !  !  !  !  !  !  !  !  !   U871 2.5 !  !  !  !  !  !  !  !  !  ! 
+  U865 1.7 !  !  !  !  !  !  !  !  !  !   U863 1.5 !  !  !  !  !  !  !  !  !  ! 
+  U857 0.7 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U855 0.5 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U880 3.6 ?  !  ?  ?  Gd Gd Gd Gd Gd ?   U878 3.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U872 2.6 !  !  !  !  !  !  !  !  !  !   U870 2.4 !  !  !  !  !  !  !  !  !  ! 
+  U864 1.6 !  !  !  !  !  !  !  !  !  !   U862 1.4 !  !  !  !  !  !  !  !  !  ! 
+  U856 0.6 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U854 0.4 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U877 3.3 !  !  !  !  !  !  !  !  !  !   U875 3.1 !  !  !  !  !  !  !  !  !  ! 
+  U869 2.3 !  !  !  !  !  !  !  !  !  !   U867 2.1 !  !  !  !  !  !  !  !  !  ! 
+  U861 1.3 !  !  !  !  !  !  !  !  !  !   U859 1.1 !  !  !  !  !  !  !  !  !  ! 
+  U853 0.3 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U851 0.1 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U876 3.2 !  !  !  !  !  !  !  !  !  !   U874 3.0 !  !  !  !  !  !  !  !  !  ! 
+  U868 2.2 !  !  !  !  !  !  !  !  !  !   U866 2.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U860 1.2 !  !  !  !  !  !  !  !  !  !   U858 1.0 !  !  !  !  !  !  !  !  !  ! 
+  U852 0.2 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd  U850 0.0 Gd Gd Gd Gd Gd Gd Gd Gd Gd Gd
+
+The question marks in the address test results above indicate that the address
+line had a low number of errors, which could be caused by side-effects of
+bad adjacent address lines.  If you add the "debug" flag to the addr test,
+it will give you an exact count of failures per address line.  Here, we
+can see more clearly the low failure counts on all address lines except A8:
+
+1> ziptest addr debug
+Memory config: 1Mx4 (4Mb) Static Column (MSM514402, etc)
+Memory refresh: 154 clocks (6.16 usec)
+  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0
+  -------- -- -- -- -- -- -- -- -- -- --  -------- -- -- -- -- -- -- -- -- -- --
+  U881 3.7  0  0  0  0  0  0  0  0  0  0  U879 3.5 45 45 44 45 46 47 48 48 48 48
+  U873 2.7 40 39 42 39 41 43 44 42 40 40  U871 2.5 35 41 39 38 39 36 38 39 32 36
+  U865 1.7 44 43 42 43 46 45 46 43 42 44  U863 1.5 45 47 48 48 48 48 48 48 47 48
+  U857 0.7  0  0  0  0  0  0  0  0  0  0  U855 0.5  0  0  0  0  0  0  0  0  0  0
+  U880 3.6  6 33  4  4  2  0  0  0  0  2  U878 3.4  0  0  0  0  0  0  0  0  0  0
+  U872 2.6 31 38 33 36 33 32 29 34 28 34  U870 2.4 41 43 47 44 41 44 45 42 44 43
+  U864 1.6 30 32 31 31 32 33 31 31 29 33  U862 1.4 47 45 47 44 40 43 44 44 48 45
+  U856 0.6  0  0  0  0  0  0  0  0  0  0  U854 0.4  0  0  0  0  0  0  0  0  0  0
+  U877 3.3 45 45 43 42 44 44 44 41 42 44  U875 3.1 45 44 44 44 44 45 45 46 46 45
+  U869 2.3 47 45 46 45 47 43 44 42 42 44  U867 2.1 48 48 48 48 48 48 48 48 48 48
+  U861 1.3 44 45 46 48 48 48 46 43 44 45  U859 1.1 45 47 44 47 45 45 45 41 44 45
+  U853 0.3  0  0  0  0  0  0  0  0  0  0  U851 0.1  0  0  0  0  0  0  0  0  0  0
+  U876 3.2 47 47 43 43 44 44 48 45 43 44  U874 3.0 41 40 40 40 36 37 39 41 44 39
+  U868 2.2 43 46 46 46 43 45 45 44 43 44  U866 2.0  0  0  0  0  0  0  0  0  0  0
+  U860 1.2 32 34 32 33 30 27 28 33 30 30  U858 1.0 42 40 40 41 41 41 38 40 41 39
+  U852 0.2  0  0  0  0  0  0  0  0  0  0  U850 0.0  0  0  0  0  0  0  0  0  0  0
+
+You might wonder about U860.  There is a failed ZIP which is installed in
+this socket.  A couple I/O lines (A2 and A4) still work, but this is not
+sufficient to confirm any of the address lines are good.  There is not a
+ZIP IC installed in U864, U871, or U872, so it's a odd why these also present
+lower error counts (one must assume a bit of randomness since there is no
+IC driving the data lines when addressing unpopulated sockets).
+
+If the ZIP memory is configured in 256Kx4 mode (4MB max fast memory),
+then the A9 address line test can not be tested.  Output will reflect that
+difference:
+
+Address line test
+  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0
+  -------- -- -- -- -- -- -- -- -- -- --  -------- -- -- -- -- -- -- -- -- -- --
+  U881 3.7 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd  U879 3.5 NA !  !  !  !  !  !  !  !  ! 
+  U873 2.7 NA !  !  !  !  !  !  !  !  !   U871 2.5 NA !  !  !  !  !  !  !  !  ! 
+  U865 1.7 NA !  !  !  !  !  !  !  !  !   U863 1.5 NA !  !  !  !  !  !  !  !  ! 
+  U857 0.7 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd  U855 0.5 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U880 3.6 NA !  ?  ?  Gd Gd Gd Gd ?  ?   U878 3.4 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U872 2.6 NA !  !  !  !  !  !  !  !  !   U870 2.4 NA !  !  !  !  !  !  !  !  ! 
+  U864 1.6 NA !  !  !  !  !  !  !  !  !   U862 1.4 NA !  !  !  !  !  !  !  !  ! 
+  U856 0.6 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd  U854 0.4 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U877 3.3 NA !  !  !  !  !  !  !  !  !   U875 3.1 NA !  !  !  !  !  !  !  !  ! 
+  U869 2.3 NA !  !  !  !  !  !  !  !  !   U867 2.1 NA !  !  !  !  !  !  !  !  ! 
+  U861 1.3 NA !  !  !  !  !  !  !  !  !   U859 1.1 NA !  !  !  !  !  !  !  !  ! 
+  U853 0.3 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd  U851 0.1 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U876 3.2 NA !  !  !  !  !  !  !  !  !   U874 3.0 NA !  !  !  !  !  !  !  !  ! 
+  U868 2.2 NA !  !  !  !  !  !  !  !  !   U866 2.0 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+  U860 1.2 NA !  !  !  !  !  !  !  !  !   U858 1.0 NA !  !  !  !  !  !  !  !  ! 
+  U852 0.2 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd  U850 0.0 NA Gd Gd Gd Gd Gd Gd Gd Gd Gd
+
+
+=============================================================================
+
+Memory cell test
+----------------
+The last test is a comprehensive data pattern test which walks each memory
+location in each ZIP package.  This test takes considerably longer to run
+than the data line test or the address line test.
+
+In default mode, this test will only use alternating 0x5 and 0xa values at
+the four bits of each ZIP IC to verify all memory cells.  In this mode,
+each cell gets tested for retention of both a 0 value and a 1 value.
+When the "LONG" parameter is specified, then each ZIP IC is also tested
+with the following additional patterns: 0xc, 0x3, 0x1, 0x2, 0x4, 0x8, 0x7,
+0xe, 0xd, 0xb, and 0x0.
+
+At the end of the test, a summary will be displayed.  "Good" means that
+all cells of the specific chip passed the test.  An "!" means failures
+were detected.
+
+Example output:
+
+1> ziptest cell      
+
+Memory config: 256x4 (1Mb) Static Column (MSM514402, etc)
+Memory refresh: 238 clocks (9.52 usec)
+
+Memory cell test
+  ................
+  Socket   Result   Socket   Result
+  -------- ------   -------- ------
+  U881 3.7 Good     U879 3.5 !   
+  U873 2.7 !        U871 2.5 !   
+  U865 1.7 !        U863 1.5 !   
+  U857 0.7 Good     U855 0.5 Good
+  U880 3.6 !        U878 3.4 Good
+  U872 2.6 !        U870 2.4 !   
+  U864 1.6 !        U862 1.4 !   
+  U856 0.6 Good     U854 0.4 Good
+  U877 3.3 !        U875 3.1 !   
+  U869 2.3 !        U867 2.1 !   
+  U861 1.3 !        U859 1.1 !   
+  U853 0.3 Good     U851 0.1 Good
+  U876 3.2 !        U874 3.0 !   
+  U868 2.2 !        U866 2.0 Good
+  U860 1.2 !        U858 1.0 !   
+  U852 0.2 Good     U850 0.0 Good
+
+=============================================================================
+Example ziptest output where a good bank 0 of 256Kx4 ZIP ICs are installed
+in an Amiga while Ramsey is configured for 1Mx4 mode.  As you can tell from
+the patterns, the ICs are installed in U850, U851, U852, U853, U854, U855,
+U856, and U857.
+
+1> ziptest
+ZipTest 1.0 (Dec 06 2017) by Chris Hooper
+
+Memory config: 1Mx4 (4096KB per bank) Static Column (MSM514402, etc)
+Memory refresh: 238 clocks (9.52 usec)
+Data line test
+  Socket   ADDR    IO1  IO2  IO3  IO4   Socket   ADDR    IO1  IO2  IO3  IO4
+  -------- ------- ---- ---- ---- ----  -------- ------- ---- ---- ---- ----
+  U881 3.7 71ffffb 1    1    1    1     U879 3.5 71ffffa 1    1    1    1
+  U873 2.7 75ffffb 1    1    1    1     U871 2.5 75ffffa 1    1    1    1
+  U865 1.7 79ffffb 1    1    ?    ?     U863 1.5 79ffffa ?    1    1    1
+  U857 0.7 7dffffb Good Good Good Good  U855 0.5 7dffffa Good Good Good Good
+  U880 3.6 71ffffb 1    1    1    1     U878 3.4 71ffffa 1    1    1    1
+  U872 2.6 75ffffb 1    ?    1    1     U870 2.4 75ffffa 1    1    1    1
+  U864 1.6 79ffffb 1    1    1    1     U862 1.4 79ffffa ?    ?    1    ?
+  U856 0.6 7dffffb Good Good Good Good  U854 0.4 7dffffa Good Good Good Good
+  U877 3.3 71ffff9 1    1    1    1     U875 3.1 71ffff8 1    1    1    1   
+  U869 2.3 75ffff9 1    1    1    1     U867 2.1 75ffff8 1    1    1    1
+  U861 1.3 79ffff9 1    1    1    1     U859 1.1 79ffff8 1    1    1    ?
+  U853 0.3 7dffff9 Good Good Good Good  U851 0.1 7dffff8 Good Good Good Good
+  U876 3.2 71ffff9 1    1    1    1     U874 3.0 71ffff8 1    1    1    1   
+  U868 2.2 75ffff9 1    1    ?    1     U866 2.0 75ffff8 1    1    1    1   
+  U860 1.2 79ffff9 1    1    1    1     U858 1.0 79ffff8 1    1    ?    1
+  U852 0.2 7dffff9 Good Good Good Good  U850 0.0 7dffff8 Good Good Good Good
+
+Address line test
+  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  Socket   A9 A8 A7 A6 A5 A4 A3 A2 A1 A0
+  -------- -- -- -- -- -- -- -- -- -- --  -------- -- -- -- -- -- -- -- -- -- --
+  U881 3.7 !  !  !  !  !  !  !  !  !  !   U879 2.5 !  !  !  !  !  !  !  !  !  !
+  U873 2.7 !  !  !  !  !  !  !  !  !  !   U871 3.5 !  !  !  !  !  !  !  !  !  !
+  U865 1.7 !  !  !  !  !  !  !  !  !  !   U863 1.5 !  !  !  !  !  !  !  !  !  !
+  U857 0.7 !  ?  ?  Gd Gd Gd Gd Gd ?  ?   U855 0.5 !  ?  ?  Gd Gd Gd Gd Gd ?  ?
+  U880 3.6 !  !  !  !  !  !  !  !  !  !   U878 3.4 !  !  !  !  !  !  !  !  !  !
+  U872 2.6 !  !  !  !  !  !  !  !  !  !   U870 2.4 !  !  !  !  !  !  !  !  !  !
+  U864 1.6 !  !  !  !  !  !  !  !  !  !   U862 1.4 !  !  !  !  !  !  !  !  !  !
+  U856 0.6 !  ?  ?  Gd Gd Gd Gd Gd ?  ?   U854 0.4 !  ?  ?  Gd Gd Gd Gd Gd ?  ?
+  U877 3.3 !  !  !  !  !  !  !  !  !  !   U875 3.1 !  !  !  !  !  !  !  !  !  !
+  U869 2.3 !  !  !  !  !  !  !  !  !  !   U867 2.1 !  !  !  !  !  !  !  !  !  !
+  U861 1.3 !  !  !  !  !  !  !  !  !  !   U859 1.1 !  !  !  !  !  !  !  !  !  !
+  U853 0.3 !  ?  ?  Gd Gd Gd Gd Gd ?  ?   U851 0.1 !  ?  ?  Gd Gd Gd Gd Gd ?  ?
+  U876 3.2 !  !  !  !  !  !  !  !  !  !   U874 3.0 !  !  !  !  !  !  !  !  !  !
+  U868 2.2 !  !  !  !  !  !  !  !  !  !   U866 2.0 !  !  !  !  !  !  !  !  !  !
+  U860 1.2 !  !  !  !  !  !  !  !  !  !   U858 1.0 !  !  !  !  !  !  !  !  !  !
+  U852 0.2 !  ?  ?  Gd Gd Gd Gd Gd ?  ?   U850 0.0 !  ?  ?  Gd Gd Gd Gd Gd ?  ?
+
+Memory cell test
+  ..... . . .
+  Socket   Result   Socket   Result
+  -------- ------   -------- ------
+  U881 3.7 !        U879 3.5 !
+  U873 2.7 !        U871 2.5 !
+  U865 1.7 !        U863 1.5 !
+  U857 0.7 !        U855 0.5 !
+  U880 3.6 !        U878 3.4 !
+  U872 2.6 !        U870 2.4 !
+  U864 1.6 !        U862 1.4 !
+  U856 0.6 !        U854 0.4 !
+  U877 3.3 !        U875 3.1 !
+  U869 2.3 !        U867 2.1 !
+  U861 1.3 !        U859 1.1 !
+  U853 0.3 !        U851 0.1 !
+  U876 3.2 !        U874 3.0 !
+  U868 2.2 !        U866 2.0 !
+  U860 1.2 !        U858 1.0 !
+  U852 0.2 !        U850 0.0 !
+
+Although this memory (or a portion of it) might pass testing by Amiga OS,
+the ziptest utility will still detect a problem.  In this particular case,
+adjusting J852 is all that is necessary for the installed memory to be
+reported as Good.
+
+=============================================================================
+
+Other options
+-------------
+The ziptest utility has a few additional command line options which may
+be listed by supplying a "?" argument.  All supported arguments:
+
+    ADDR   - perform address line test
+    ASCII  - show ASCII ART of chip positions and pins
+    CELL   - perform memory cell test (verify every bit)
+    DATA   - perform data line test
+    DIP    - show DIP RAM positions
+    DEBUG  - enable debug output
+    FORCE  - ignore fact enforcer is present
+    LONG   - perform more thorough (slower) line test
+    MAP    - just show map of corresponding bits (no test)
+    QUIET  - do not display banner
+    STROBE - generate power-of-two address strobes for a probe
+
+ADDR
+----
+Perform only the address line test.  No other tests will be executed unless
+they are also specified.  The LONG option may be specified to run more
+iterations of the address line test, which slightly increases the chances
+of finding a floating line.
+
+ASCII
+-----
+Display ASCII art showing the placement and pinout of the ZIP and DIP ICs
+on the board.
+
+CELL
+----
+Perform only the memory cell test.  No other tests will be executed unless
+they are also specified.  The set of patterns for each ZIP IC will be 0x5
+and 0xa, which tests each cell set to 0 value and set to 1 value.  The LONG
+option may be specified to run each ZIP through more patterns.  The complete
+set of patterns for each ZIP IC in this mode will be: 0x5, 0xa, 0xc, 0x3,
+0x1, 0x2, 0x4, 0x8, 0x7, 0xe, 0xd, 0xb, and 0x0.
+
+DATA
+----
+Perform only the data line test.  No other tests will be executed unless
+they are also specified.  The LONG option may be specified to run a more
+comprehensive test by checking data lines to each ZIP IC separately from
+each other, rather than in parallel with data lines of the other ZIP ICs.
+
+DIP
+---
+Also display fast memory DIP chip positions (these mirror the first bank
+of ZIP memory, so the information is likely redundant).
+
+DEBUG
+-----
+Display test debug output.  This is most useful for the Address line test
+as it changes the good/bad result to be a count of failures.  Adding the
+flag a second time will generate more output for the address line test.
+
+FORCE
+-----
+Ignore the fact that Enforcer or MuForce is running.  This will likely
+lead to a hang when the test runs as the address exceptions are handled by
+software.
+
+LONG
+----
+Run a more comprehensive version of the data, address, or cell tests.
+See the individual test descriptions above for more details.
+
+MAP
+---
+Display a map of how Amiga CPU physical memory addresses and bit positions
+correspond to data bits and address bits of the ZIP ICs.  Note that the
+maps displayed will be different depending on whether the memory is jumpered
+for 1Mx4 or 256Kx4 mode.
+
+QUIET
+-----
+Do not display the banner showing the name, version, and date of ziptest.
+
+STROBE
+------
+This option is for board level debug.  It will cause read strobes on the
+address lines in order to assist with debug using an oscilloscope.  You can
+use any of the parallel port data lines as a trigger for the oscilloscope
+or logic analyzer to capture the address lines during the RAS and CAS cycles.
+
+=============================================================================
+
+Source code notes
+-----------------
+Source may be compiled with either DICE 3.15 (use dmake) or VBCC 0.906
+13.08.2017 (use compile_vbcc script).  I use DICE for the distribution build
+as it compiles faster and the final executable is a bit smaller.  I didn't
+notice a performance difference between the two for this particular
+application.  Although gcc can also compile the utility, I wasn't able to
+figure out how to set the hunk attributes to MEMF_CHIP, which is required.
+
+Since the code must run from chip memory, there is a small startup function
+in stack.asm which relocates the program's stack to chip memory.  It then
+calls c_main() in ziptest.c.
+
+There are a few defines at the top of ziptest.c -- you shouldn't need to
+adjust any of the settings.  DISABLE_INTERRUPTS should be defined otherwise
+random crashes are likely to occur if some of the fast memory was mapped
+by AmigaOS.

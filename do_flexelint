@@ -1,0 +1,3 @@
+#!/bin/sh
+
+flexelint -b flexelint.lnt -I../dcc/include/amiga20 -I../dcc/include ziptest.c
