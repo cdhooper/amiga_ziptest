@@ -1,12 +1,12 @@
 /*
- * ZipTest  Version 1.0 2017-12-06
+ * ZipTest  Version 1.1 2024-01-17
  * -------------------------------
  *
  * Utility to test the installed ZIP memory on an Amiga 3000 motherboard.
  * This program only runs correctly on the Amiga 3000 and will malfunction
  * (and likely crash) on other Amiga models.
  *
- * Copyright 2017 Chris Hooper.  This program and source may be used
+ * Copyright 2024 Chris Hooper.  This program and source may be used
  * and distributed freely, for any purpose which benefits the Amiga
  * community.  Commercial use of the binary, source, or algorithms requires
  * prior written or email approval from Chris Hooper <amiga@cdh.eebugs.com>.
@@ -23,21 +23,14 @@
 #include <exec/ports.h>
 #include <exec/io.h>
 #include <exec/semaphores.h>
+#include <exec/execbase.h>
+#include <proto/dos.h>
 #include <clib/exec_protos.h>
+#include <clib/timer_protos.h>
 
-/*
- * Disable interrupts when touching memory.  The alternative is to disable
- * multitasking, which is less safe since interrupt service routines can
- * still run, and might be using the memory being modified.
- */
-#define DISABLE_INTERRUPTS
+const char *version = "\0$VER: ZIPTest 1.1 (2024-01-17) by Chris Hooper";
 
-/*
- * Perform memory I/O operations from supervisor state.  The alternative
- * is access from user state, which doesn't seem to be a problem with
- * AmigaOS 3.1.
- */
-#undef USE_SUPERVISOR_STATE
+extern struct ExecBase *SysBase;
 
 /*
  * Doing the call-out for a cache line flush has been measured as being
@@ -70,15 +63,16 @@
  * ========================================================================
  * 1Mx4bit Static Column ZIP chips
  * -------------------------------
- * Hitachi: HM514402BZ6
+ * Hitachi: HM514402BZ6 HM514402__8
  * OKI: MSM514402 M514402A-__Z M514402B-__Z
  *      __ is one of 60, 70, or 80 -- designates speed grade (60, 70, 80 ns)
- * Toshiba: TC514402Z-80
+ * Toshiba: TC514402Z-80 TC514402AZ-70_
+ * NEC: D424402V-70
  *
  * ========================================================================
- * 1Mx4bit ZIP chips supporting fast page mode
+ * 1Mx4bit ZIP chips supporting Fast Page Mode
  * -------------------------------------------
- * Fujitsu: MB81C1000A-60PSZ MB814400A-70PSZ
+ * Fujitsu: MB814400A-70PSZ
  * Hitachi: HM514400AZ HM514400ALZ HM514400ASLZ
  * Micron: MT4C4001JCZ
  * Mitsubishi: M5M44400AL
@@ -104,19 +98,20 @@
  * TI: TMS44C258
  *
  * =======================================================================
- * 256Kx4bit ZIP chips supporting fast page mode
+ * 256Kx4bit ZIP chips supporting Fast Page Mode
  * ---------------------------------------------
  * Fujitsu: MB81C4256A-70PSZ
  * Hitachi: HM514256
  * NEC: uPD424256
  * OKI: MSM514256
  * Toshiba: TC514256
+ * Samsung: KM44C256DZ
  *
  * ========================================================================
  */
 
 /*
- * Probed addresses to RAS/CAS A9-A0 on Amiga 1Mx4 DIP RAM.
+ * Probed addresses to RAS/CAS A9-A0 on Amiga 1Mx4 DRAM.
  *            RAS:A9-A0  CAS:A9-A0
  *            ---------- ----------
  * 0x07c00000 1111111110 1111111110
@@ -141,7 +136,7 @@
  * 0x07d00000 0111111110 1111111110
  * 0x07e00000 1111111111 1111111110
  *
- * Probed addresses to RAS/CAS A8-A0 pins on Amiga 256Kx4 DIP RAM.
+ * Probed addresses to RAS/CAS A8-A0 pins on Amiga 256Kx4 DRAM.
  *            RAS:A8-A0 CAS:A8-A0
  *            --------- ---------
  * 0x07f00000 111111110 111111110
@@ -165,26 +160,51 @@
  * 0x07f80000 011111110 111111110
  *
  * [ Note that A0 is inverted in all DIP and ZIP accesses]
+ *
+ *
+ * From the Ramsey specification, the following address ranges
+ * map to the RAS lines with Amiga 1mx4 DRAM (RSIZE=1, RAMWIDTH=1)
+ *
+ * 0x07000000 RAS0
+ * 0x07400000 RAS1
+ * 0x07800000 RAS2
+ * 0x07c00000 RAS3
+ *
+ * Amiga 246x4 DRAM (RSIZE=0, RAMWIDTH=1)
+ * 0x07c00000 RAS0
+ * 0x07d00000 RAS1
+ * 0x07e00000 RAS2
+ * 0x07f00000 RAS3
  */
 
 #define ADDR8(x)      (volatile uint8_t *)(x)
+#define ADDR16(x)     (volatile uint16_t *)(x)
 #define ADDR32(x)     (volatile uint32_t *)(x)
 
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 #define BIT(x)        (1 << (x))
 
-#define AMIGA_CHIP_RAM_ADDR   0x00010000  /* Read address to force bus access */
+// #define AMIGA_CHIP_RAM_ADDR   0x00010000  /* Read address to force bus access */
 #define FASTMEM_TOP           0x08000000  /* Last fast memory address + 1 */
 #define ZIP_BANKS             4           /* Number of fast memory banks */
 
+#define CIAA_TIMB_LO          0x00bfe601
+#define CIAA_TIMB_HI          0x00bfe701
+#define CIAB_TOD_LO           0x00bfd800
+#define CIAB_TOD_MID          0x00bfd900
+#define CIAB_TOD_HI           0x00bfda00
+
 #define RAMSEY_CONTROL        0x00de0003  /* Ramsey control register */
 #define RAMSEY_VERSION        0x00de0043  /* Ramsey version register */
+#define AGNUS_DMACON_R        0x00dff002  /* Agnus DMA control register (R) */
+#define AGNUS_DMACON_W        0x00dff096  /* Agnus DMA control register (W) */
 
 #define RAMSEY_CONTROL_PAGE     (1 << 0)  /* 1=Page mode enabled */
 #define RAMSEY_CONTROL_BURST    (1 << 1)  /* 1=Burst mode enabled */
 #define RAMSEY_CONTROL_WRAP     (1 << 2)  /* 1=wrap, 0=no backward bursts */
 #define RAMSEY_CONTROL_RAMSIZE  (1 << 3)  /* 1=1Mx4 (4MB), 0=256x4 (1MB)*/
-#define RAMSEY_CONTROL_RAMWIDTH (1 << 4)  /* 1=4-bit, 0=1=bit */
+#define RAMSEY_CONTROL_RAMWIDTH (1 << 4)  /* Ramsey-4 1=4-bit, 0=1=bit */
+#define RAMSEY_CONTROL_SKIP     (1 << 4)  /* Ramsey-7 1=4-clocks, 0=5 clocks */
 #define RAMSEY_CONTROL_REFRESH0 (1 << 5)  /* 00=154, 01=238, 10=380, 11=Off */
 #define RAMSEY_CONTROL_REFRESH1 (1 << 6)  /* 00=154, 01=238, 10=380, 11=Off */
 #define RAMSEY_CONTROL_TEST     (1 << 7)  /* 1=Test mode */
@@ -202,7 +222,13 @@
 #define POS_RIGHT             1           /* ZIP IC in the right column */
 #define POS_BOTTOM            2           /* Only used for DIP ICs */
 
-/* OS 4.x might require the processor to be in Supervisor state */
+#define SC_MODE_NONE          0           /* Page off, burst off */
+#define SC_MODE_BURST         1           /* Burst mode (68040: + Page mode) */
+#define SC_MODE_PAGE          2           /* Page mode */
+#define SC_MODE_BOTH          3           /* Burst mode and Page mode */
+
+/* Ramsey-07 requires the processor to be in Supervisor state */
+#define USE_SUPERVISOR_STATE
 #ifdef USE_SUPERVISOR_STATE
 #define SUPERVISOR_STATE_ENTER() { \
                                    APTR old_stack = SuperState()
@@ -214,28 +240,46 @@
 #endif
 
 /* Either prevent interrupts or prevent multitasking */
-#ifdef DISABLE_INTERRUPTS
 #define INTERRUPTS_DISABLE() Disable()  /* Disable Interrupts */
 #define INTERRUPTS_ENABLE()  Enable()   /* Enable Interrupts */
-#else
-#define INTERRUPTS_DISABLE() Forbid()   /* Disable Multitasking */
-#define INTERRUPTS_ENABLE()  Permit()   /* Enable Multitasking */
-#endif
 
-/* Either use cache line flush or disable data cache during access */
-#ifdef USE_CACHE_LINE_FLUSH
 #define CACHE_LINE_FLUSH(addr, len) CacheClearE((void *)(addr), len, \
                                                 CACRF_ClearD)
-#define CACHE_DISABLE_DATA()
-#define CACHE_ENABLE_DATA()
-#else
-#define CACHE_LINE_FLUSH(addr, len)
-#define CACHE_DISABLE_DATA()  { \
-                                uint32_t oldcachestate = \
-                                CacheControl(0L, CACRF_EnableD) & CACRF_EnableD
-#define CACHE_ENABLE_DATA()     CacheControl(oldcachestate, oldcachestate); \
-                              }
-#endif
+#define CACHE_ENABLE_DATA() \
+        { \
+            uint32_t oldcachestate = \
+            CacheControl(CACRF_EnableD, CACRF_EnableD) & \
+                         (CACRF_EnableD | CACRF_DBE);
+#define CACHE_DISABLE_DATA() \
+        { \
+            uint32_t oldcachestate = \
+            CacheControl(0L, CACRF_EnableD) & (CACRF_EnableD | CACRF_DBE)
+#define CACHE_ENABLE_BURST() \
+            oldcachestate |= (CacheControl(CACRF_DBE, CACRF_DBE) & CACRF_DBE)
+#define CACHE_DISABLE_BURST() \
+            oldcachestate |= (CacheControl(0, CACRF_DBE) & CACRF_DBE)
+#define CACHE_RESTORE_STATE() \
+            CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE); \
+        }
+
+/* MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state */
+#define MMU_DISABLE() \
+        { \
+            uint32_t oldmmustate; \
+            if (cpu_type == 68030) { \
+                oldmmustate = mmu_get_tc_030(); \
+                mmu_set_tc_030(oldmmustate & ~BIT(31)); \
+            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
+                oldmmustate = mmu_get_tc_040(); \
+                mmu_set_tc_040(oldmmustate & ~BIT(15)); \
+            }
+#define MMU_RESTORE() \
+            if (cpu_type == 68030) { \
+                mmu_set_tc_030(oldmmustate); \
+            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
+                mmu_set_tc_040(oldmmustate); \
+            } \
+        }
 
 /* Modern stdint types */
 typedef unsigned char  uint8_t;
@@ -245,6 +289,28 @@ typedef unsigned int   uint32_t;
 #ifndef __GNUC__
 typedef unsigned int   uint;
 #endif
+
+void cpu_dcache_flush(void);
+void burst_copyline(volatile void *dst, volatile void *src);
+uint burst_copy(volatile void *dst, volatile void *src, uint len);
+void burst_read_moveml(volatile void *src, uint size); // must not exceed 8MB
+void burst_read_readl(volatile void *src, uint size);  // must not exceed 2MB
+void burst_test_read(volatile void *dst, volatile void *src, uint flags);
+uint32_t mmu_get_type(void);
+uint32_t mmu_get_tc_030(void);
+uint32_t mmu_get_tc_040(void);
+void     mmu_set_tc_030(uint32_t tc);
+void     mmu_set_tc_040(uint32_t tc);
+uint16_t get_sr(void);
+uint16_t irq_disable(void);
+uint16_t irq_enable(void);
+static uint cpu_type = 0;
+static uint8_t cpu_can_do_burst = 0;
+static uint8_t mmu_is_active = 0;
+static uint8_t ramsey_version = 0;
+static uint8_t ramsey_rev = 0;
+
+static int get_mem_types(uint addrbits, uint32_t *bank_results, uint flags);
 
 typedef struct {
     const char skt[6];    /* String description of socket, e.g. "U881" */
@@ -341,15 +407,32 @@ static const u_to_bit_t dip_u_data[] = {
 /*
  * Ramsey refresh timing table, indexed by bit values from
  * RAMSEY_CONTROL_REFRESH0 and RAMSEY_CONTROL_REFRESH1.
+ *
+ * Ramsey documentation seems to be incorrect as to the number of
+ * clock cycles which Ramsey uses depending on the value of the
+ * refresh bits in the Ramsey control register.
+ *
+ *                            --Documented--  --Measured--
+ *       Documented Measured    16M     25M     16M    25M
+ * Index Clocks     Clocks     usec    usec    usec   usec
+ *   0   154        156        9.24    6.16    9.72   6.24
+ *   1   238        240       14.28    9.52   15.00   9.60
+ *   2   380        372       22.80   15.20   23.25  14.88
+ *   3   Infinite   Infinite      -       -       -      -
+ *
+ * The position of the 16M/25M did selects Index 0 or Index 1 at reset,
+ * but the number of measured clocks at a given Index did not change
+ * regardless of the position of the 16M/25M jumper.
  */
 static const struct {
-    const char clocks[4];
-    const char interval[12];
+    char clocks[4];
+    char interval_16m[12];  /* 16.67 MHz */
+    char interval_25m[12];  /* 25.00 MHz */
 } ramsey_refresh_timing[] = {
-    { "154", "6.16 usec"  },  /* RATE 00 */
-    { "238", "9.52 usec"  },  /* RATE 01 */
-    { "380", "15.2 usec"  },  /* RATE 10 */
-    { "N/A", "No refresh" },  /* RATE 11 */
+    { "156", "9.72 usec",  "6.24 usec"  },  /* RATE 00 */
+    { "240", "15.00 usec", "9.60 usec"  },  /* RATE 01 */
+    { "372", "23.25 usec", "14.88 usec" },  /* RATE 10 */
+    { "N/A", "No refresh", "No refresh" },  /* RATE 11 */
 };
 
 
@@ -364,12 +447,16 @@ print_bits(uint count, uint32_t value)
     printf("\n");
 }
 
-#ifdef __VBCC__
+#if defined(__GNUC__)
+#define tolower(x) ((x) | 0x20)
+#endif
+
+#if defined(__VBCC__) || defined(__GNUC__)
 #define stricmp(x, y) strcasecmp(x, y)
 
 /* strcasecmp() - simple string compare which ignores uppercase vs lowercase */
-static int
-strcasecmp(char *str1, char *str2)
+int
+strcasecmp(const char *str1, const char *str2)
 {
     while (*str1 != '\0') {
         if (tolower(*str1) != tolower(*str2))
@@ -548,7 +635,7 @@ get_status(uint32_t bitvals, uint32_t result_or, uint32_t result_and,
     else if (result_and & bitvals)
         status = "1";   /* Stuck 1 */
     else if (result_diff & bitvals)
-        status = "?";   /* Floats */
+        status = "!";   /* Floats */
     else
         status = "Good";
     return (status);
@@ -560,7 +647,7 @@ get_status(uint32_t bitvals, uint32_t result_or, uint32_t result_and,
 static void
 usage(void)
 {
-    printf("This tool will perform a simple tests on ZIP memory installed in\n"
+    printf("This tool will perform simple tests on ZIP memory installed in\n"
            "an Amiga 3000 motherboard.  Options:\n"
            "    ADDR   - perform address line test\n"
            "    ASCII  - show ASCII ART of chip positions and pins\n"
@@ -568,10 +655,12 @@ usage(void)
            "    DATA   - perform data line test\n"
            "    DIP    - show DIP RAM positions\n"
            "    DEBUG  - enable debug output\n"
+           "    INFO   - only show system information\n"
            "    FORCE  - ignore fact enforcer is present\n"
            "    LONG   - perform more thorough (slower) line test\n"
            "    MAP    - just show map of corresponding bits (no test)\n"
            "    QUIET  - do not display banner\n"
+           "    SPROBE - probe for static-column memory (68030 only)\n"
            "    STROBE - generate power-of-two address strobes for a probe\n");
 }
 
@@ -595,16 +684,16 @@ show_ascii_art(void)
            "\n"
            "   DIP   __   __        ZIP          W\n"
            "        |  \\_/  |                    R  N\n"
-           "    IO1-|1    11|-VSS          I  I  I  .\n"
-           "    IO2-|2    12|-IO4       C  O  O  T  C  A  A  A  A  A\n"
-           "  WRITE-|3    13|-IO3       S  4  1  E  .  1  3  4  6  8\n"
-           "    RAS-|4    14|-CS        |  |  |  |  |  |  |  |  |  |  (back)\n"
-           "   N.C.-|5    15|-OE      ______________________________\n"
-           "     A0-|6    16|-A8     /  2  4  6  8 10 12 14 16 18 20\\\n"
-           "     A1-|7    17|-A7    (                                )\n"
-           "     A2-|8    18|-A6     \\______________________________/\n"
-           "     A3-|9    19|-A5     1 |  |  |  |  |  |  |  |  |  |\n"
-           "    VCC-|10   20|-A4       O  I  V  I  R  A  A  V  A  A   (face)\n"
+           "    IO1-|1    20|-VSS          I  I  I  .\n"
+           "    IO2-|2    19|-IO4       C  O  O  T  C  A  A  A  A  A\n"
+           "  WRITE-|3    18|-IO3       S  4  1  E  .  1  3  4  6  8\n"
+           "    RAS-|4    17|-CS        |  |  |  |  |  |  |  |  |  |  (back)\n"
+           "     A9-|5    16|-OE      ______________________________\n"
+           "     A0-|6    15|-A8     /  2  4  6  8 10 12 14 16 18 20\\\n"
+           "     A1-|7    14|-A7    (                                )\n"
+           "     A2-|8    13|-A6     \\______________________________/\n"
+           "     A3-|9    12|-A5     1 |  |  |  |  |  |  |  |  |  |\n"
+           "    VCC-|10   11|-A4       O  I  V  I  R  A  A  V  A  A   (face)\n"
            "        |_______|          E  O  S  O  A  0  2  C  5  7\n"
            "                              3  S  2  S        C\n");
 }
@@ -649,18 +738,123 @@ enforcer_check(void)
     return (0);
 }
 
-/* ramsey_check() - verify the "expected" version of Ramsey is present */
-static int
-ramsey_check(void)
+static uint8_t
+get_ramsey_version(void)
 {
-    uint8_t ramsey_version = *ADDR8(RAMSEY_VERSION);
+    uint8_t version;
+    SUPERVISOR_STATE_ENTER();
+    version = *ADDR8(RAMSEY_VERSION);
+    SUPERVISOR_STATE_EXIT();
+    return (version);
+}
 
-    if ((ramsey_version > 0xd) || (ramsey_version < 4)) {
-        printf("Unrecognized Ramsey version $%x -- this program only works on "
-               "Amiga 3000\n", ramsey_version);
-        return (1);
+static uint8_t
+get_ramsey_control(void)
+{
+    uint8_t control;
+    SUPERVISOR_STATE_ENTER();
+    control = *ADDR8(RAMSEY_CONTROL);
+    SUPERVISOR_STATE_EXIT();
+    return (control);
+}
+
+static void
+set_ramsey_control(uint32_t control)
+{
+    uint timeout;
+    uint8_t got;
+    SUPERVISOR_STATE_ENTER();
+    *ADDR8(RAMSEY_CONTROL) = control;
+    for (timeout = 1 << 16; timeout > 0; timeout--) {
+        got = *ADDR8(RAMSEY_CONTROL);
+        if (((got ^ control) &
+            (RAMSEY_CONTROL_PAGE | RAMSEY_CONTROL_BURST |
+             RAMSEY_CONTROL_WRAP | RAMSEY_CONTROL_SKIP)) == 0) {
+            break;
+        }
     }
+    SUPERVISOR_STATE_EXIT();
+
+    if (timeout == 0) {
+        printf("Ramsey timeout %02x != expected %02x\n", got, control);
+        return;
+    }
+}
+
+const uint
+get_ramsey_clock_OLD(void)
+{
+    /* Count how many Ramsey register writes can be done in a single tick */
+    uint     iters;
+    uint     mhz;
+    uint     access_per_tick;
+    uint     ediff;
+    uint     ediffmax;
+    ULONG    freq;
+    struct EClockVal eclk_start;
+    struct EClockVal eclk_end;
+
     return (0);
+    SUPERVISOR_STATE_ENTER();
+    Forbid();
+    freq = ReadEClock(&eclk_start);  // Interrupts required by ReadEClock()
+    ediffmax = freq / 10;
+    iters = 0;
+    while (1) {
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        *ADDR8(RAMSEY_VERSION) = 0;
+        if ((++iters & 0x00003fff) == 0) {
+            if ((iters & 0x0001ffff) == 0)
+                break;  /* Timeout */
+
+            ReadEClock(&eclk_end);
+            ediff = eclk_end.ev_lo - eclk_start.ev_lo;
+            if (ediff > 71590) // 100ms
+                break;
+        }
+    }
+
+    Permit();
+    SUPERVISOR_STATE_EXIT();
+    access_per_tick = iters * 16 * freq / ediff;
+#define DCC_O2_MAGIC_FACTOR 2809
+    mhz = (access_per_tick * DCC_O2_MAGIC_FACTOR + 500000) / 1000000;
+    printf("iters=%u ediff=%u freq=%u access/tick=%u %u\n",
+           iters, ediff, freq, access_per_tick, access_per_tick * DCC_O2_MAGIC_FACTOR);
+
+    return (mhz);
+}
+
+const uint
+get_cpu(void)
+{
+    UWORD attnflags = SysBase->AttnFlags;
+
+    if (attnflags & 0x80)
+        return (68060);
+    if (attnflags & AFF_68040)
+        return (68040);
+    if (attnflags & AFF_68030)
+        return (68030);
+    if (attnflags & AFF_68020)
+        return (68020);
+    if (attnflags & AFF_68010)
+        return (68010);
+    return (68000);
 }
 
 /*
@@ -672,22 +866,23 @@ ramsey_check(void)
 static uint32_t
 test_value(uint32_t addr, uint32_t value)
 {
-    uint32_t orig_chip;
     uint32_t orig_zip;
+    uint32_t flip_zip;
+    uint32_t flip_addr;
     uint32_t result;
-    uint32_t dummy;
 
-    orig_zip      = *ADDR32(addr);
-    orig_chip     = *ADDR32(AMIGA_CHIP_RAM_ADDR);
-    *ADDR32(AMIGA_CHIP_RAM_ADDR) = ~value;
-    *ADDR32(AMIGA_CHIP_RAM_ADDR) = 0;
-    CACHE_LINE_FLUSH(ADDR32(AMIGA_CHIP_RAM_ADDR), 4);
-    *ADDR32(addr) = value;
-    CACHE_LINE_FLUSH(ADDR32(addr), 4);
-    dummy = *ADDR32(AMIGA_CHIP_RAM_ADDR);
-    result        = *ADDR32(addr);
-    *ADDR32(addr) = orig_zip;
-    *ADDR32(AMIGA_CHIP_RAM_ADDR) = orig_chip;
+    flip_addr = addr ^ 0x0400000;  // Choose another fastmem bank
+
+    orig_zip           = *ADDR32(addr);
+    flip_zip           = *ADDR32(flip_addr);
+    *ADDR32(addr)      = value;
+    CACHE_LINE_FLUSH(ADDR32(addr), 16);
+    *ADDR32(flip_addr) = ~value;
+    CACHE_LINE_FLUSH(ADDR32(flip_addr), 16);
+    result             = *ADDR32(addr);
+    *ADDR32(addr)      = orig_zip;
+    *ADDR32(flip_addr) = flip_zip;
+
     return (result);
 }
 
@@ -722,26 +917,21 @@ test_dbits(uint32_t addr, uint bitvals, uint32_t *bits_and, uint32_t *bits_or,
     test_seq[5] = 0x5a5a5a5a;  /* Set every other bit (floating) */
 
     CACHE_DISABLE_DATA();
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    MMU_DISABLE();
     for (count = 0; count < passes; count++) {
-        SUPERVISOR_STATE_ENTER();
-        INTERRUPTS_DISABLE();
         for (pos = 0; pos < ARRAY_SIZE(test_seq); pos++) {
             result = test_value(addr, test_seq[pos]);
             result_and  &= result;
             result_or   |= result;
             result_diff |= (result ^ test_seq[pos]);
-            if (((result_diff & bitvals) == bitvals) &&
-                ((result_and & bitvals) == 0) &&
-                ((result_or & bitvals) == bitvals)) {
-                /* Already saw floating data */
-                goto finish_early;
-            }
         }
-        INTERRUPTS_ENABLE();
-        SUPERVISOR_STATE_EXIT();
     }
-finish_early:
-    CACHE_ENABLE_DATA();
+    MMU_RESTORE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+    CACHE_RESTORE_STATE();
 
     *bits_and = result_and;
     *bits_or  = result_or;
@@ -766,9 +956,19 @@ data_line_test(uint addrbits, uint flags)
     uint32_t result_and  = 0;
     uint32_t result_or   = 0;
     uint32_t result_diff = 0;
-    static const char socket_l1[] = "Socket   ADDR    IO1  IO2  IO3  IO4 ";
-    static const char socket_l2[] = "-------- ------- ---- ---- ---- ----";
+    const char *socket_l1 = "Socket   IO1  IO2  IO3  IO4 ";
+    const char *socket_l2 = "-------- ---- ---- ---- ----";
 
+    /*
+     * Note that the data line test currently uses 76 columns for its
+     * output. This is the maximum that the default Amiga console font
+     * can handle without having overscan (such is the default when
+     * no Startup-Sequence is used, or we boot from floppy).
+     */
+    if (flags & FLAG_DEBUG) {
+        socket_l1 = "Socket   ADDR    IO1  IO2  IO3  IO4 ";
+        socket_l2 = "-------- ------- ---- ---- ---- ----";
+    }
     printf("Data line %s\n", (flags & FLAG_SHOW_MAP) ? "map" : "test");
     printf("  %s  %s\n"
            "  %s  %s\n", socket_l1, socket_l1, socket_l2, socket_l2);
@@ -778,8 +978,9 @@ data_line_test(uint addrbits, uint flags)
         uint     nibble = zip_u_data[pos].nibble;
         uint32_t addr   = amask_to_address(bank, 0, addrbits);
 
-        printf("  %s %u.%u %07x", zip_u_data[pos].skt, zip_u_data[pos].bank,
-               nibble, addr + nibble / 2);
+        printf("  %s %u.%u", zip_u_data[pos].skt, zip_u_data[pos].bank, nibble);
+        if (flags & FLAG_DEBUG)
+            printf(" %07x", addr + nibble / 2);
         if (flags & FLAG_SHOW_MAP) {
             for (io_pin = 0; io_pin < 4; io_pin++)
                 printf("  %2u ", zip_u_data[pos].pins[io_pin]);
@@ -856,8 +1057,11 @@ data_line_test(uint addrbits, uint flags)
     return (errs);
 }
 
-static const char a9a0[]   = " A9 A8 A7 A6 A5 A4 A3 A2 A1 A0";
-static const char dashes[] = " -- -- -- -- -- -- -- -- -- --";
+static const char aaaa[]    = " A A A A A A A A A A";
+static const char a9a0[]    = " 9 8 7 6 5 4 3 2 1 0";
+static const char a9a0w[]   = " A9 A8 A7 A6 A5 A4 A3 A2 A1 A0";
+static const char dashes[]  = " - - - - - - - - - -";
+static const char dashesw[] = " -- -- -- -- -- -- -- -- -- --";
 
 /* Display a map of addresses corresponding to single address lines */
 static void
@@ -866,26 +1070,26 @@ address_line_map(uint addrbits)
     uint bit;
     uint abit;
     uint casbits = addrbits / 2;
-    static const char uscore[] = "_____________";
+    static const char uscore[] = "________";
 
     printf("\nAddress line map\n");
-    printf("  Bank 0  %sRAS%s %sCAS%s\n"
-           "  Address%s%s\n"
-           "  -------%s%s\n",
+    printf("  Bank 0   %sRAS%s  %sCAS%s\n"
+           "  Address %s %s\n"
+           "  ------- %s %s\n",
            uscore, uscore, uscore, uscore, a9a0, a9a0, dashes, dashes);
     for (bit = 0; bit < addrbits; bit++) {
         uint32_t amask = BIT(bit);
 
-        printf("  %07x ", amask_to_address(0, amask, addrbits));
+        printf("  %07x", amask_to_address(0, amask, addrbits));
         for (abit = addrbits; abit > 0; abit--) {
-            if ((abit == addrbits) && (casbits == 9))
-                printf("NA");  /* A9 not valid */
-            if (abit == casbits) {
+            if ((abit == casbits) || (abit == addrbits)) {
                 printf(" ");
-                if (casbits == 9)
-                    printf("NA");  /* A9 not valid */
+                if (casbits == 9) {
+                    printf("-");
+                    continue;
+                }
             }
-            printf("%3d", (amask & BIT(abit - 1)) ? 1 : 0);
+            printf("%2d", (amask & BIT(abit - 1)) ? 1 : 0);
         }
         printf("\n");
     }
@@ -918,6 +1122,8 @@ address_line_test(uint addrbits, uint flags)
     uint     bad_threshold = 16;
     uint     casbits       = addrbits / 2;
     int      errs          = 0;
+    int      show_type     = 0;
+    uint32_t bank_results[ZIP_BANKS];
     uint32_t save_addrs[8];
     uint32_t save_data[8];
     uint16_t cas_bit_badcount[ZIP_BANKS][10][8];  /* [bank][rascas][nibbles] */
@@ -966,6 +1172,7 @@ address_line_test(uint addrbits, uint flags)
                 CACHE_DISABLE_DATA();
                 SUPERVISOR_STATE_ENTER();
                 INTERRUPTS_DISABLE();
+                MMU_DISABLE();
 
                 /* Store data and pattern memory */
                 for (cur = 0; cur < ARRAY_SIZE(save_addrs); cur++) {
@@ -978,9 +1185,10 @@ address_line_test(uint addrbits, uint flags)
                     *ADDR32(save_addrs[cur]) = save_data[cur];
                     save_data[cur] = temp;
                 }
+                MMU_RESTORE();
                 INTERRUPTS_ENABLE();
                 SUPERVISOR_STATE_EXIT();
-                CACHE_ENABLE_DATA();
+                CACHE_RESTORE_STATE();
 
                 /* Verify pattern */
                 if (flags & FLAG_MORE_DEBUG)
@@ -1048,25 +1256,56 @@ address_line_test(uint addrbits, uint flags)
         }
     }
 
-    printf("  Socket  %s  Socket  %s\n"
-           "  --------%s  --------%s\n", a9a0, a9a0, dashes, dashes);
+    if (get_mem_types(addrbits, bank_results, flags) == 0)
+        show_type = 1;
+
+    if (flags & FLAG_DEBUG) {
+        if (show_type) {
+            printf("  Socket  %s Type  Socket  %s Type\n"
+                   "  --------%s ----  --------%s ----\n",
+                   a9a0w, a9a0w, dashes, dashes);
+        } else {
+            printf("  Socket  %s  Socket  %s\n"
+                   "  --------%s  --------%s\n",
+                   a9a0w, a9a0w, dashesw, dashesw);
+        }
+    } else {
+        if (show_type) {
+            printf("%30s Mem %30s Mem\n", aaaa, aaaa);
+            printf("  Socket  %s Type  Socket  %s Type\n"
+                   "  --------%s ----  --------%s ----\n",
+                   a9a0, a9a0, dashes, dashes);
+        } else {
+            printf("%30s%30s\n", aaaa, aaaa);
+            printf("  Socket  %s  Socket  %s\n"
+                   "  --------%s  --------%s\n", a9a0, a9a0, dashes, dashes);
+        }
+    }
     for (pos = 0; pos < ARRAY_SIZE(zip_u_data); pos++) {
         uint nibble = zip_u_data[pos].nibble;
+        uint was_bad = 0;
         bank = zip_u_data[pos].bank;
         printf("  %s %u.%u", zip_u_data[pos].skt, zip_u_data[pos].bank, nibble);
-        if (casbits < 10)
-            printf(" NA");
-        casbit = casbits - 1;
+        if (casbits < 10) {
+            printf(" -");
+            if (flags & FLAG_DEBUG)
+                printf(" ");
+        }
         for (casbit = casbits; casbit-- > 0; ) {
             uint badcount = cas_bit_badcount[bank][casbit][nibble];
             if (flags & FLAG_DEBUG)
                 printf(" %2u", (badcount <= 99) ? badcount : 99);
             else if (badcount == 0)
-                printf(" Gd");
+                printf(" G");
             else if (badcount < bad_threshold)
-                printf(" ? ");
+                printf(" ?");
             else
-                printf(" ! ");
+                printf(" !");
+            was_bad += badcount;
+        }
+        if (show_type) {
+            printf(" %-4s", was_bad ? "?" :
+                   (bank_results[bank] & BIT(nibble)) ? "SC" : "FPM");
         }
         if (zip_u_data[pos].position == POS_RIGHT)
             printf("\n");
@@ -1095,10 +1334,638 @@ address_line_test(uint addrbits, uint flags)
     return (errs);
 }
 
+static uint32_t
+memory_read_usec(int sc_mode, uint xsize)
+{
+    uint8_t  ramsey_control_old;
+    uint8_t  ramsey_control_new;
+    uint     ediff;
+    ULONG    freq;
+    uint     calltime;
+    uint32_t usec;
+    struct EClockVal eclk_start;
+    struct EClockVal eclk_end;
+
+    ramsey_control_old = get_ramsey_control();
+    switch (sc_mode) {
+        case SC_MODE_NONE:
+            ramsey_control_new = ramsey_control_old &
+                                 ~(RAMSEY_CONTROL_BURST | RAMSEY_CONTROL_PAGE);
+            break;
+        case SC_MODE_BURST:
+            ramsey_control_new = (ramsey_control_old & ~RAMSEY_CONTROL_PAGE) |
+                                 RAMSEY_CONTROL_BURST;
+            break;
+        case SC_MODE_PAGE:
+            ramsey_control_new = (ramsey_control_old & ~RAMSEY_CONTROL_BURST) |
+                                 RAMSEY_CONTROL_PAGE;
+            break;
+        case SC_MODE_BOTH:
+            ramsey_control_new = ramsey_control_old |
+                                 RAMSEY_CONTROL_BURST | RAMSEY_CONTROL_PAGE;
+            break;
+    }
+//  printf("next mode %u xs=%x\n", sc_mode, xsize);
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    ReadEClock(&eclk_start);
+    ReadEClock(&eclk_start);
+    ReadEClock(&eclk_end);
+    INTERRUPTS_ENABLE();
+    calltime = eclk_end.ev_lo - eclk_start.ev_lo;
+
+    INTERRUPTS_DISABLE();
+ // CacheClearU();            // Last chance for write-back
+    cpu_dcache_flush();       // Last chance for write-back
+    ReadEClock(&eclk_start);  // Interrupts required by ReadEClock()
+    MMU_DISABLE();
+
+    *ADDR8(RAMSEY_CONTROL) = ramsey_control_new;
+    while (*ADDR8(RAMSEY_CONTROL) != ramsey_control_new)
+        ;
+    burst_read_readl(ADDR32(0x07c00000), xsize);
+
+    *ADDR8(RAMSEY_CONTROL) = ramsey_control_old;
+    while (*ADDR8(RAMSEY_CONTROL) != ramsey_control_old)
+        ;
+
+    MMU_RESTORE();
+    cpu_dcache_flush();       // Ensure no corrupt data is retained
+    freq = ReadEClock(&eclk_end);
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+
+    ediff = eclk_end.ev_lo - eclk_start.ev_lo - calltime;
+#if 0
+    printf("mode=%x control old=%02x new=%02x ediff=%u\n",
+           sc_mode, ramsey_control_old, ramsey_control_new, ediff);
+#endif
+    usec = (ediff * 10000 / (freq / 10)) * 10;
+    if (usec == 0)
+        usec = 10;
+
+    return (usec);
+}
+
+/*
+ * cpu_can_burst
+ * -------------
+ * Returns non-zero when the CPU can do burst reads
+ */
+static int
+cpu_can_burst(void)
+{
+    uint32_t xsize = 1 << 18;  // 256 K  (must not exceed 4MB)
+    uint32_t usec_off;
+    uint32_t usec_burst;
+    uint     pct_x_10;
+
+    CACHE_ENABLE_DATA();
+    CACHE_ENABLE_BURST();
+    usec_off   = memory_read_usec(SC_MODE_NONE, xsize);
+    usec_burst = memory_read_usec(SC_MODE_BURST, xsize);
+    CACHE_RESTORE_STATE();
+
+    pct_x_10   = usec_off * 1000 / usec_burst;
+#if 0
+    printf("usec_off=%u usec_burst=%u\n", usec_off, usec_burst);
+#endif
+
+    /* Consider anything greater than 4% as burst-capable */
+    return (pct_x_10 > 1040);
+}
+
+static void
+sc_memory_speed(void)
+{
+    int      iters = 1;
+    uint32_t usec_off;
+    uint32_t usec_burst;
+    uint32_t usec_fpm;
+    uint32_t usec_both;
+    uint32_t xsize = 1 << 17;
+
+    CACHE_ENABLE_DATA();
+    CACHE_ENABLE_BURST();
+    usec_off   = memory_read_usec(SC_MODE_NONE, xsize);
+    usec_burst = memory_read_usec(SC_MODE_BURST, xsize);
+    usec_fpm   = memory_read_usec(SC_MODE_PAGE, xsize);
+    usec_both  = memory_read_usec(SC_MODE_BOTH, xsize);
+    CACHE_RESTORE_STATE();
+
+    /* Measure and report memory speed with static column mode on and off */
+    printf("With datacache, with burst\n");
+    printf("Off:   %u KB/sec\n", iters * xsize * 1000 / usec_off);
+    printf("Burst: %u KB/sec\n", iters * xsize * 1000 / usec_burst);
+    printf("Page:  %u KB/sec\n", iters * xsize * 1000 / usec_fpm);
+    printf("Both:  %u KB/sec\n", iters * xsize * 1000 / usec_both);
+
+    printf("\nWith datacache, no burst\n");
+    CACHE_ENABLE_DATA();
+    CACHE_DISABLE_BURST();
+    usec_off   = memory_read_usec(SC_MODE_NONE, xsize);
+    usec_burst = memory_read_usec(SC_MODE_BURST, xsize);
+    usec_fpm   = memory_read_usec(SC_MODE_PAGE, xsize);
+    usec_both  = memory_read_usec(SC_MODE_BOTH, xsize);
+    CACHE_RESTORE_STATE();
+    printf("Off:   %u KB/sec\n", iters * xsize * 1000 / usec_off);
+    printf("Burst: %u KB/sec\n", iters * xsize * 1000 / usec_burst);
+    printf("Page:  %u KB/sec\n", iters * xsize * 1000 / usec_fpm);
+    printf("Both:  %u KB/sec\n", iters * xsize * 1000 / usec_both);
+
+    printf("\nNo datacache, burst\n");
+    CACHE_DISABLE_DATA();
+    CACHE_ENABLE_BURST();
+    usec_off   = memory_read_usec(SC_MODE_NONE, xsize);
+    usec_burst = memory_read_usec(SC_MODE_BURST, xsize);
+    usec_fpm   = memory_read_usec(SC_MODE_PAGE, xsize);
+    usec_both  = memory_read_usec(SC_MODE_BOTH, xsize);
+    CACHE_RESTORE_STATE();
+
+    printf("Off:   %u KB/sec\n", iters * xsize * 1000 / usec_off);
+    printf("Burst: %u KB/sec\n", iters * xsize * 1000 / usec_burst);
+    printf("Page:  %u KB/sec\n", iters * xsize * 1000 / usec_fpm);
+    printf("Both:  %u KB/sec\n", iters * xsize * 1000 / usec_both);
+    printf("\nNo datacache, no burst\n");
+    CACHE_DISABLE_DATA();
+    CACHE_DISABLE_BURST();
+    usec_off   = memory_read_usec(SC_MODE_NONE, xsize);
+    usec_burst = memory_read_usec(SC_MODE_BURST, xsize);
+    usec_fpm   = memory_read_usec(SC_MODE_PAGE, xsize);
+    usec_both  = memory_read_usec(SC_MODE_BOTH, xsize);
+    CACHE_RESTORE_STATE();
+    printf("Off:   %u KB/sec\n", iters * xsize * 1000 / usec_off);
+    printf("Burst: %u KB/sec\n", iters * xsize * 1000 / usec_burst);
+    printf("Page:  %u KB/sec\n", iters * xsize * 1000 / usec_fpm);
+    printf("Both:  %u KB/sec\n", iters * xsize * 1000 / usec_both);
+}
+
+#define CIAA_TBHI 0x00bfe701
+#define CIAA_TBLO 0x00bfe601
+static uint cia_ticks(void);
+
+#define RAMSEY_REFRESH_ITERS 256
+
+/*
+ * ramsey_refresh_ticks
+ * --------------------
+ * Calculate the number of ticks it takes for Ramsey to do multiple
+ * DRAM refresh cycles. This result will then be used to determine the
+ * input clock speed into Ramsey.
+ */
+static uint
+ramsey_refresh_ticks(uint8_t control)
+{
+    uint16_t cia_ticks_start;
+    uint16_t cia_ticks_end;
+    uint8_t  ncontrol = control ^ RAMSEY_CONTROL_WRAP;
+    uint     calltime;
+    uint     count;
+
+    cia_ticks_start = cia_ticks();  // force code into cache
+    cia_ticks_start = cia_ticks();
+    cia_ticks_end   = cia_ticks();
+    calltime = cia_ticks_start - cia_ticks_end;
+
+    /* Enable desired refresh rate (and synchronize with interval) */
+    *ADDR8(RAMSEY_CONTROL) = control;
+    while (*ADDR8(RAMSEY_CONTROL) != control)
+        ;
+
+    cia_ticks_start = cia_ticks();  // force code into cache
+    cia_ticks_start = cia_ticks();
+
+    /*
+     * Enable and disable wrap multiple times.
+     *
+     * Note that this code is structured so that dcc will generate
+     * the least number of instructions.
+     */
+    count = RAMSEY_REFRESH_ITERS;
+    do {
+        *ADDR8(RAMSEY_CONTROL) = ncontrol;
+        while (*ADDR8(RAMSEY_CONTROL) != ncontrol)
+            ;
+        *ADDR8(RAMSEY_CONTROL) = control;
+        while (*ADDR8(RAMSEY_CONTROL) != control)
+            ;
+        count -= 2;
+    } while (count != 0);
+
+    cia_ticks_end = cia_ticks();
+
+    return (cia_ticks_start - cia_ticks_end - calltime);
+}
+
+static uint
+cia_ticks(void)
+{
+    uint8_t hi1;
+    uint8_t hi2;
+    uint8_t lo;
+
+    hi1 = *ADDR8(CIAA_TBHI);
+    lo  = *ADDR8(CIAA_TBLO);
+    hi2 = *ADDR8(CIAA_TBHI);
+
+    /*
+     * The below operation will provide the same effect as:
+     *     if (hi2 != hi1)
+     *         lo = 0xff;  // rollover occurred
+     */
+    lo |= (hi2 - hi1);  // rollover of hi forces lo to 0xff value
+
+    return (lo | (hi2 << 8));
+}
+
+static uint
+measure_ramsey_refreshes_per_ms(uint8_t control)
+{
+    uint8_t ocontrol = *ADDR8(RAMSEY_CONTROL);
+    uint    count;
+    uint    freq;
+    uint    ticks;
+    uint    refs;
+    struct  EClockVal eclk;
+    uint16_t (*ptr)(uint8_t control);
+    uint    funclen = (uint) measure_ramsey_refreshes_per_ms -
+                      (uint) ramsey_refresh_ticks + 16;
+
+    ptr = AllocMem(funclen, MEMF_PUBLIC | MEMF_FAST);
+    if (ptr != NULL) {
+        CopyMem(ramsey_refresh_ticks, ptr, funclen);
+        CacheClearE(ptr, funclen, CACRF_ClearD | CACRF_ClearI);
+    }
+
+    /*
+     * Ensure that control has opposite wrap value of current state,
+     * so a state change always occurs
+     */
+    control = (control & ~RAMSEY_CONTROL_WRAP) |
+              ((ocontrol & RAMSEY_CONTROL_WRAP) ^ RAMSEY_CONTROL_WRAP);
+
+    Disable();
+
+    if (ptr != NULL) {
+        ticks = ptr(control);
+    } else {
+#define AGNUS_DMA_DISABLE
+#ifdef AGNUS_DMA_DISABLE
+        /* Temporarily disable Agnus DMA */
+        uint16_t dmacon = *ADDR16(AGNUS_DMACON_R);
+        *ADDR16(AGNUS_DMACON_W) = 0x0100;  // Disable bit plane DMA
+#endif
+        ticks = ramsey_refresh_ticks(control);
+#ifdef AGNUS_DMA_DISABLE
+        *ADDR16(AGNUS_DMACON_W) = 0x8000 | dmacon;  // Re-enable bit plane DMA
+#endif
+    }
+
+    /* Restore original refresh rate */
+    *ADDR8(RAMSEY_CONTROL) = ocontrol;
+    while (*ADDR8(RAMSEY_CONTROL) != ocontrol)
+        ;
+
+    Enable();
+
+    freq = ReadEClock(&eclk);
+    count = RAMSEY_REFRESH_ITERS;
+    refs = freq * 1000 / ticks * count / 1000;
+#if 0
+    printf(" ticks=%u freq=%u count=%u refs=%u ", ticks, freq, count, refs);
+    printf("ns=%u ", ticks * 100000 / count * 1000 / (freq / 10));
+#endif
+    /*
+     * At 25 MHz and refresh mode 1 (240 clock cycles), a single refresh
+     * will take 9.6 usecs. Ramsey must do a total of 512 refreshes to
+     * hit all rows, which means all memory is getting refreshed over a
+     * period of 4915.2 usecs. The 9.6 usec interval has been verified
+     * with a logic analyzer.
+     */
+    if (ptr != NULL)
+        FreeMem(ptr, funclen);
+    return (refs);
+}
+
+/*
+ * get_ramsey_clock
+ * ----------------
+ * Returns the calculated Ramsey clock speed in KHz
+ */
+const uint
+get_ramsey_clock(void)
+{
+    uint8_t  ocontrol = get_ramsey_control();
+    uint8_t  ncontrol;
+    uint     cycles;
+    uint     pass;
+    uint     refs;
+    uint     refs_max = 0;
+    uint     index;
+
+    index = ocontrol & (RAMSEY_CONTROL_REFRESH0 | RAMSEY_CONTROL_REFRESH1);
+    ncontrol = ocontrol;
+
+    switch (index) {
+        case 0:
+            cycles = 156;
+            break;
+        case RAMSEY_CONTROL_REFRESH0:
+            cycles = 240;
+            break;
+        case RAMSEY_CONTROL_REFRESH1:
+            cycles = 372;
+            break;
+        case RAMSEY_CONTROL_REFRESH0 | RAMSEY_CONTROL_REFRESH1:
+            return (0);
+    }
+
+    Forbid();
+    SUPERVISOR_STATE_ENTER();
+    for (pass = 0; pass < 4; pass++) {
+        refs = measure_ramsey_refreshes_per_ms(ncontrol);
+        if (refs_max < refs)
+            refs_max = refs;
+    }
+    SUPERVISOR_STATE_EXIT();
+    Permit();
+
+    return (cycles * refs_max / 1000);
+}
+
+/* ramsey_check() - verify the "expected" version of Ramsey is present */
+static int
+ramsey_check(void)
+{
+    ramsey_version = get_ramsey_version();
+
+    switch (ramsey_version) {
+        case 0x7f:
+            ramsey_rev = 1;
+            break;
+        case 0x0d:
+            ramsey_rev = 4;
+            break;
+        case 0x0f:
+            ramsey_rev = 7;
+            break;
+        default:
+            printf("Unrecognized Ramsey version $%x -- this program only works "
+                   "on Amiga 3000\n", ramsey_version);
+            return (1);
+    }
+    return (0);
+}
+
+
+static void
+sc_memory_measure_refresh(void)
+{
+    uint8_t  ocontrol = get_ramsey_control();
+    uint8_t  ncontrol;
+    uint     refs0;
+    uint     refs1;
+    uint     refs2;
+
+    ncontrol = ocontrol & ~(RAMSEY_CONTROL_REFRESH0 | RAMSEY_CONTROL_REFRESH1);
+
+    Forbid();
+    SUPERVISOR_STATE_ENTER();
+    refs0 = measure_ramsey_refreshes_per_ms(ncontrol);
+    refs1 = measure_ramsey_refreshes_per_ms(ncontrol | RAMSEY_CONTROL_REFRESH0);
+    refs2 = measure_ramsey_refreshes_per_ms(ncontrol | RAMSEY_CONTROL_REFRESH1);
+    SUPERVISOR_STATE_EXIT();
+    Permit();
+
+    /*
+     * Ramsey Refresh cycles                  ----------measured------------
+     * Index  Clocks    16 MHz      25 MHz    Clocks  16 MHz      25 MHz
+     *   0    154       9.24 usec   6.16 usec 156     9.72 usec   6.240 usec
+     *   1    238       14.28 usec  9.52 usec 240     15.00 usec  9.600 usec
+     *   2    380       22.8 usec   15.2 usec 372     23.25 usec  14.88 usec
+     *   3    infinite  -           -         -       -           -
+     */
+    printf("  (156)=%-7u (240)=%-7u (372)=%u\n", refs0, refs1, refs2);
+}
+
+
+/*
+ * How to check for static column RAM (taken from Ramsey specification)
+ * OLD VERSION:
+ *
+ * 1. Verify Ramsey version is not 0x7f (doesn't support SC RAM).
+ * 2. Disable all interrupts and snapshot memory.
+ * 3. Turn page mode on by setting the bit in the RAMSEY control register
+ *    (read it back until the bit takes effect).
+ * 4. Write $5AC35AC3, $AC35AC35, $C35AC35A, $35AC35AC to four consecutive
+ *    longwords in the same page (to be in the same page, A11-A31 must be
+ *    the same for all four longwords).
+ * 5. Turn page mode off by resetting the bit in RAMSEY (wait for it to take
+ *    effect).
+ * 6. Compare the four longword values with what they were written with.
+ *    If they are correct, then this bank of RAM has all static column DRAMs.
+ * 7. Repeat steps 2 through 6 for each bank of Fast memory.
+ * 8. Restore memory and re-enable interrupts.
+ *
+ * Since a refresh cycle will close the page, writes to the four longwords
+ * of RAM must be less than 10 ?secs? apart.
+ *
+ * The above is out of data (no longer correct) since the A4000 came along.
+ * On the A4000, if you do a write with burst mode enabled, and the memory
+ * doesn't support burst mode, you can damage the hardware. Also, on the
+ * 68040, page mode is required to be on.
+ *
+ * NEW VERSION:
+ * 1. Verify Ramsey version is not 0x7f (doesn't support SC RAM).
+ * 2. Disable all interrupts and snapshot memory.
+ * 3. Disable cache, burst mode, and page mode.
+ * 4. Write $5AC3A53C, $AC3A53C5, $C3A53C5A, $3A53C5AC to four consecutive
+ *    longwords in the same page (to be in the same page, A11-A31 must be
+ *    the same for all four longwords).
+ * 5. Enable cache, burst mode, and page mode (68040).
+ * 6. Read back the four consecutive longwords.
+ * 7. Disable cache, burst mode, and page mode.
+ * 6. Compare the four longword values with what they were written with.
+ *    If they are correct, then this bank of RAM has all static column DRAMs.
+ * 7. Repeat steps 2 through 6 for each bank of Fast memory.
+ * 8. Restore memory and re-enable interrupts.
+ */
+
+static const uint32_t burst_magic[] = {
+    0X5ac3a53c, 0Xac3a53c5, 0Xc3a53c5a, 0X3a53c5aC,
+    0x11111111, 0x22222222, 0x44444444, 0x88888888,
+    0xeeeeeeee, 0xdddddddd, 0xbbbbbbbb, 0x77777777,
+    0x12345678, 0x23456789, 0x3456789a, 0x456789ab,
+};
+
+#define BURST_WORDS ARRAY_SIZE(burst_magic)
+
+/*
+ * sc_memory_probe_addr() probe all nibbles at the specified memory address
+ *                        for Static Column support.
+ */
+static uint32_t
+sc_memory_probe_addr(uint32_t addr, uint flags)
+{
+    uint8_t  ramsey_control_old;
+    uint8_t  ramsey_control_burst;
+    uint32_t save_data[BURST_WORDS];
+    uint32_t got_data[BURST_WORDS];
+    uint32_t word;
+    uint32_t has_sc = BIT(8) - 1;  /* Assume all are Static Column */
+    uint     nibble;
+    uint     count;
+
+    /* Disable Ramsey page mode */
+    INTERRUPTS_DISABLE();
+    ramsey_control_old = get_ramsey_control();
+    ramsey_control_burst = ramsey_control_old | RAMSEY_CONTROL_BURST;
+    if (cpu_type == 68040)
+        ramsey_control_burst |= RAMSEY_CONTROL_PAGE;
+    else
+        ramsey_control_burst |= RAMSEY_CONTROL_WRAP;
+
+    set_ramsey_control(ramsey_control_old &
+                       ~(RAMSEY_CONTROL_BURST | RAMSEY_CONTROL_PAGE));
+
+    /* Enable burst in CPU cache (no burst until Ramsey burst is enabled) */
+    CACHE_ENABLE_DATA();
+    CACHE_ENABLE_BURST();
+    SUPERVISOR_STATE_ENTER();
+    MMU_DISABLE();
+
+    /* Save original data */
+    memcpy(save_data, (void *) ADDR32(addr), sizeof (save_data));
+
+    /* Fill with burst pattern */
+    memcpy((void *) ADDR32(addr), burst_magic, sizeof (burst_magic));
+
+    /* Ensure data lands in memory */
+    cpu_dcache_flush();
+
+    for (count = 0; count < ARRAY_SIZE(got_data) / 4; count++) {
+        burst_test_read(&got_data[count * 4],
+                        ADDR32(addr + count * 0x10), ramsey_control_burst);
+    }
+
+    /* Restore original data */
+    memcpy((void *) ADDR32(addr), save_data, sizeof (save_data));
+
+    MMU_RESTORE();
+    cpu_dcache_flush();
+    SUPERVISOR_STATE_EXIT();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+
+    /* Check for match of expected values */
+    for (word = 0; word < BURST_WORDS; word++) {
+        for (nibble = 0; nibble < 8; nibble++) {
+            uint nibble_value = (got_data[word] >> (nibble * 4)) & 0xf;
+            uint sc_expected = (burst_magic[word] >> (nibble * 4)) & 0xf;
+            if (nibble_value != sc_expected) {
+                /* Nibble did not match -- not Static Column */
+                has_sc &= ~BIT(nibble);
+            }
+        }
+    }
+    if (flags & FLAG_DEBUG) {
+        printf("%08x %08x %08x %08x\n",
+               got_data[0], got_data[1], got_data[2], got_data[3]);
+    }
+
+    return (has_sc);
+}
+
+static int
+get_mem_types(uint addrbits, uint32_t *bank_results, uint flags)
+{
+    uint bank;
+
+    if (!cpu_can_do_burst)
+        return (1);
+
+    memset(bank_results, 0, sizeof (*bank_results) * ZIP_BANKS);
+
+    /* Generate addresses */
+    for (bank = 0; bank < ZIP_BANKS; bank++) {
+        /* Probe all nibbles in bank at the same time */
+        uint32_t addr = amask_to_address(bank, 0, addrbits) & ~0xff;
+        bank_results[bank] = sc_memory_probe_addr(addr, flags);
+    }
+    return (0);
+}
+
+/*
+ * sc_memory_probe() - probe all memory for Static Column support
+ *
+ * Static column memory supports burst read/write operations from the CPU.
+ * Unfortunately, this burst mode doesn't seem to be supported by most
+ * accelerators (A3640 for example), so the test will only give reliable
+ * results with the onboard 68030.
+ *
+ * The test works by capturing memory contents, patterning those contents
+ * with a burst write, reading those pattern contents back, restoring the
+ * original contents, and then comparing the pattern contents with what
+ * was written.
+ */
+static void
+sc_memory_probe(uint addrbits, uint flags)
+{
+    uint     pos;
+    uint     probed_banks = 0;
+    uint32_t bank_results[ZIP_BANKS];
+    struct   EClockVal eclk;
+    uint     freq;
+    static const char socket_l1[] = "Socket   ADDR    Type";
+    static const char socket_l2[] = "-------- ------- ----";
+    uint8_t ramsey_version = get_ramsey_version();
+
+    if (ramsey_version == 0x7f) {
+        printf("Ramsey-01 does not support SC RAM\n");
+        return;
+    }
+
+    freq = ReadEClock(&eclk);
+    printf("Ramsey refreshes / second measured using EClock=%u.%02u KHz\n",
+           freq / 1000, freq % 1000);
+    for (pos = 0; pos < 8; pos++)
+        sc_memory_measure_refresh();
+    printf("\n");
+
+    sc_memory_speed();
+    if (get_mem_types(addrbits, bank_results, flags)) {
+        printf("The installed CPU does not support burst and so it's not\n"
+               "possible to correctly detect installed ZIP memory type.\n");
+        return;
+    }
+
+    printf("Static Column Test\n");
+    printf("  %s  %s\n"
+           "  %s  %s\n", socket_l1, socket_l1, socket_l2, socket_l2);
+
+    /* Generate addresses */
+    for (pos = 0; pos < ARRAY_SIZE(zip_u_data); pos++) {
+        uint     bank   = zip_u_data[pos].bank;
+        uint     nibble = zip_u_data[pos].nibble;
+        uint32_t addr   = amask_to_address(bank, 0, addrbits) & ~0xff;
+        char    *dram_type;
+
+        printf("  %s %u.%u %07x ", zip_u_data[pos].skt, zip_u_data[pos].bank,
+               nibble, addr + nibble / 2);
+
+        dram_type = (bank_results[bank] & BIT(nibble)) ? "SC" : "FPM";
+        if (zip_u_data[pos].position == POS_RIGHT)
+            printf("%s\n", dram_type);
+        else
+            printf("%-4s", dram_type);
+    }
+}
+
 /*
  * gen_address_strobes() - generate address strobes on the ZIP memory bus
  *
- * This function is really only useful for probe purposes.
+ * This function is really only useful for scope/analyzer probe purposes.
  *
  * It walks all ZIP memory banks, causing reads at addresses which correspond
  * to power-of-two RAS and CAS addresses.  You will see two back-to-back reads.
@@ -1121,7 +1988,7 @@ gen_address_strobes(uint addrbits, uint flags)
     uint32_t addr1[ZIP_BANKS][21];
 
     CACHE_DISABLE_DATA();
-    CACHE_ENABLE_DATA();
+    CACHE_RESTORE_STATE();
 
     /* Generate addresses */
     for (bank = 0; bank < ZIP_BANKS; bank++) {
@@ -1142,16 +2009,17 @@ gen_address_strobes(uint addrbits, uint flags)
         }
     }
 
-    *ADDR8(AMIGA_PPORT_DATA) = 0xff;
-    *ADDR8(AMIGA_PPORT_DIR)  = 0xff;
-
     if (flags & FLAG_DEBUG)
-        printf("\n");
+        printf("(parport pins high during strobes)\n");
+
+    *ADDR8(AMIGA_PPORT_DIR)  = 0xff;
 
     for (iter = 0; iter <= 20; iter++) {
         CACHE_DISABLE_DATA();
         SUPERVISOR_STATE_ENTER();
         INTERRUPTS_DISABLE();
+        MMU_DISABLE();
+        *ADDR8(AMIGA_PPORT_DATA) = 0xff;
         for (bank = 0; bank < ZIP_BANKS; bank++) {
             uint32_t *ptr0 = &addr0[bank][0];
             uint32_t *ptr1 = &addr1[bank][0];
@@ -1165,11 +2033,12 @@ gen_address_strobes(uint addrbits, uint flags)
                 ptr1++;
             }
         }
+        *ADDR8(AMIGA_PPORT_DATA) = 0x00;
+        MMU_RESTORE();
         INTERRUPTS_ENABLE();
         SUPERVISOR_STATE_EXIT();
-        CACHE_ENABLE_DATA();
+        CACHE_RESTORE_STATE();
     }
-    *ADDR8(AMIGA_PPORT_DATA) = 0x00;
 }
 
 /* Test patterns (must be a prime number of patterns) */
@@ -1187,14 +2056,14 @@ static uint32_t
 pattern_check_mem(volatile uint32_t *addr, size_t size, uint flags)
 {
     volatile uint32_t *taddr;
-    uint32_t           err = 0;
+    uint32_t           biterr = 0;
     uint               pat;
     size_t             count;
     uint               iters = ARRAY_SIZE(cell_patterns);
     uint               iter;
 
     if (!(flags & FLAG_LONG_TEST))
-        iters = 3;
+        iters = 2;
     for (iter = 0; iter < iters; iter++) {
         /* Write pattern set */
         pat   = iter;
@@ -1207,21 +2076,20 @@ pattern_check_mem(volatile uint32_t *addr, size_t size, uint flags)
             taddr++;
         }
 
-        /* XXX: may cause a crash if the OS is using memory under test */
-        CACHE_LINE_FLUSH(ADDR32(addr), size);
+        cpu_dcache_flush();
 
         /* Verify pattern set */
         pat   = iter;
         taddr = addr;
         count = size / 4;
         while (count-- > 0) {
-            err |= (*taddr ^ cell_patterns[pat]);
+            biterr |= (*taddr ^ cell_patterns[pat]);
             if (++pat == iters)
                 pat = 0;
             taddr++;
         }
     }
-    return (err);
+    return (biterr);
 }
 
 /*
@@ -1249,61 +2117,79 @@ cell_data_test(uint32_t bank_size, uint flags)
     uint32_t *diffs     = AllocMem(TESTBLOCK_SIZE, MEMF_PUBLIC | MEMF_CHIP);
     uint8_t   bad_chips[ZIP_BANKS][8];  /* [banks][nibbles] */
 
-    printf("Memory cell test\n  ");
+    printf("Memory cell test\n");
     memset(bad_chips, 0, sizeof (bad_chips));
 
     if ((save_data == NULL) || (diffs == NULL)) {
         printf("Cannot allocate chip memory for test buffer\n");
         goto cleanup;
     }
+
     memset(diffs, 0, TESTBLOCK_SIZE);
 
     /* Perform test */
     for (bank = 0; bank < ZIP_BANKS; bank++) {
-        uint32_t start = FASTMEM_TOP - bank_size * (bank + 1);
-        uint32_t end   = FASTMEM_TOP - bank_size * bank;
-        uint32_t addr  = start;
+        uint32_t start  = FASTMEM_TOP - bank_size * (bank + 1);
+        uint32_t end    = FASTMEM_TOP - bank_size * bank;
+        uint32_t addr   = start;
+        uint     goterr = 0;
 
         if (flags & FLAG_DEBUG)
             printf("\nstart=%x end=%x\n", start, end);
+        printf("  Bank %u [%*s]\r  Bank %u [",
+               bank, bank_size / 0x20000, "", bank);
+
+        CACHE_DISABLE_DATA();
         for (addr = start; addr < end; addr += TESTBLOCK_SIZE) {
-            uint32_t err;
+            uint32_t biterr;
 
             /* Cache and interrupts are disabled in this block */
-            CACHE_DISABLE_DATA();
             SUPERVISOR_STATE_ENTER();
-            INTERRUPTS_DISABLE();
-            memcpy(save_data, (void *) ADDR32(addr), TESTBLOCK_SIZE);
-            err = pattern_check_mem(ADDR32(addr), TESTBLOCK_SIZE, flags);
-            memcpy((void *) ADDR32(addr), save_data, TESTBLOCK_SIZE);
-            INTERRUPTS_ENABLE();
+//          INTERRUPTS_DISABLE();
+            irq_disable();
+            MMU_DISABLE();
+            burst_copy(save_data, (void *) ADDR32(addr), TESTBLOCK_SIZE);
+            biterr = pattern_check_mem(ADDR32(addr), 2048, flags);
+            burst_copy((void *) ADDR32(addr), save_data, TESTBLOCK_SIZE);
+            cpu_dcache_flush();
+            MMU_RESTORE();
+            cpu_dcache_flush();
+            irq_enable();
+//          INTERRUPTS_ENABLE();
             SUPERVISOR_STATE_EXIT();
-            CACHE_ENABLE_DATA();
 
-            if (err != 0) {
+            if (biterr != 0) {
                 uint nibble;
                 if ((errs++ < 10) && (flags & FLAG_DEBUG))
-                    printf("err=%08x at %06x\n", err, addr);
+                    printf("err=%08x at %06x\n", biterr, addr);
                 for (nibble = 0; nibble < 8; nibble++) {
-                    if (err & 0xf)
+                    if (biterr & 0xf)
                         bad_chips[bank][nibble] = 1;
-                    err >>= 4;
+                    biterr >>= 4;
                 }
+                goterr++;
             }
-            if ((addr & 0x3ffff) == 0) {
+            if ((addr & 0x1ffff) == 0) {
                 uint nibble;
-                printf(".");
+//              printf("[%04x %04x %04x]", tval1, tval2, tval3);
+                printf("%c", goterr ? 'X' : '.');
                 fflush(stdout);
 
                 /* Quit early if all nibbles in this bank are bad */
-                for (nibble = 0; nibble < 8; nibble++)
-                    if (bad_chips[bank][nibble] == 0)
+                if (goterr) {
+                    for (nibble = 0; nibble < 8; nibble++)
+                        if (bad_chips[bank][nibble] == 0)
+                            break;
+                    if (nibble == 8)
                         break;
-                if (nibble == 8)
-                    break;
+                }
+                goterr = 0;
             }
         }
-        printf(" ");
+        CACHE_RESTORE_STATE();
+        if (addr >= end)
+            printf("]");
+        printf("\n");
     }
     printf("\n");
 
@@ -1327,7 +2213,7 @@ cell_data_test(uint32_t bank_size, uint flags)
         show_dip_header();
         printf("     ");
         for (nibble = 7; nibble >= 0; nibble--)
-            printf(" %-5s", bad_chips[bank][nibble] ? "BAD" : "Good");
+            printf(" %-5s", bad_chips[bank][nibble] ? "!" : "Good");
         printf("\n");
     }
 
@@ -1340,7 +2226,8 @@ cleanup:
 }
 
 /*
- * section_verify() - report if specified address is not in chip memory */
+ * section_verify() - report if specified address is not in chip memory
+ */
 static int
 section_verify(const char *str, const void *ptr)
 {
@@ -1350,6 +2237,25 @@ section_verify(const char *str, const void *ptr)
         return (1);
     }
     return (0);
+}
+
+static void
+mmu_open(void)
+{
+    uint32_t tc;
+
+    if (cpu_type == 68030) {
+        SUPERVISOR_STATE_ENTER();
+        tc = mmu_get_tc_030();              // pmove.l tc,(sp)
+        SUPERVISOR_STATE_EXIT();
+        mmu_is_active = !!(tc & BIT(31));
+    }
+    if ((cpu_type == 68040) || (cpu_type == 68060)) {
+        SUPERVISOR_STATE_ENTER();
+        tc = mmu_get_tc_040();              // movec.l tc,d0
+        SUPERVISOR_STATE_EXIT();
+        mmu_is_active = !!(tc & BIT(15));
+    }
 }
 
 /*
@@ -1363,16 +2269,21 @@ c_main(int argc, char **argv)
     uint8_t  mem_refresh;         /* Memory refresh rate code (0, 1, 2, 3) */
     uint8_t  mem_width;           /* Bits per ZIP IC: 1 or 4 (4 is expected) */
     uint     mem_addrbits;        /* ZIP memory bits (20 or 18) */
+    uint     ramsey_khz;
     int      arg;
     int      rc2;
     int      rc             = 0;
+    int      comma          = 0;
+    uint     skip_mode      = 0;
     uint     flags          = 0;
     int      flag_addr_test = 0;  /* Address line test */
     int      flag_cell_test = 0;  /* Memory cell test */
     int      flag_data_test = 0;  /* Data line test */
+    int      flag_info      = 0;  /* Only show system info */
     int      flag_force     = 0;  /* Ignore the fact that enforcer is present */
     int      flag_quiet     = 0;  /* Don't display banner */
     int      flag_strobe    = 0;  /* Generate address strobes for logic probe */
+    int      flag_sprobe    = 0;  /* Probe for static column memory */
 
     for (arg = 1; arg < argc; arg++) {
         if (stricmp(argv[arg], "ADDR") == 0) {
@@ -1393,12 +2304,16 @@ c_main(int argc, char **argv)
             flags |= FLAG_SHOW_DIP;
         } else if (stricmp(argv[arg], "FORCE") == 0) {
             flag_force = 1;
+        } else if (stricmp(argv[arg], "INFO") == 0) {
+            flag_info = 1;
         } else if (stricmp(argv[arg], "LONG") == 0) {
             flags |= FLAG_LONG_TEST;
         } else if (stricmp(argv[arg], "MAP") == 0) {
             flags |= FLAG_SHOW_MAP;
         } else if (stricmp(argv[arg], "QUIET") == 0) {
             flag_quiet = 1;
+        } else if (stricmp(argv[arg], "SPROBE") == 0) {
+            flag_sprobe = 1;
         } else if (stricmp(argv[arg], "STROBE") == 0) {
             flag_strobe = 1;
         } else {
@@ -1407,11 +2322,20 @@ c_main(int argc, char **argv)
         }
     }
     if (!flag_quiet)
-        printf("ZipTest 1.0 ("__DATE__") by Chris Hooper\n\n");
+        printf("%s\n", version + 7);
+
+    cpu_type = get_cpu();
+    mmu_open();
+    if (!flag_quiet) {
+        cpu_can_do_burst = cpu_can_burst();
+        printf("CPU: %u %s Burst%s\n", cpu_type,
+               cpu_can_do_burst ? "with" : "without",
+               mmu_is_active ? ", MMU Active" : "");
+    }
 
     if (!flag_force && enforcer_check())
         return (1);
-    if (!flag_force && ramsey_check())
+    if (ramsey_check() && !flag_force)
         return (1);
 
     /* Use bitwise OR here so that all sections are checked and reported */
@@ -1421,31 +2345,69 @@ c_main(int argc, char **argv)
         return (1);
     }
 
-#ifdef SHOW_RAMSEY_VERSION
-    printf("Ramsey Version=$%02x   Control=$%02x\n",
-           *ADDR8(RAMSEY_VERSION), *ADDR8(RAMSEY_CONTROL));
-#endif
-    mem_control  = *ADDR8(RAMSEY_CONTROL);
-    mem_refresh  = (mem_control >> 5) & 3; /* RAMSEY_CONTROL_REFRESH0 */
-    mem_addrbits = (mem_control & RAMSEY_CONTROL_RAMSIZE) ? 20 : 18;
-    mem_width    = (mem_control & RAMSEY_CONTROL_RAMWIDTH) ? 4 : 1;
-    bank_size    = BIT(mem_addrbits) * mem_width;
+    ramsey_version = get_ramsey_version();
+    mem_control    = get_ramsey_control();
+    mem_refresh    = (mem_control >> 5) & 3;  // RAMSEY_CONTROL_REFRESH0
+    mem_addrbits   = (mem_control & RAMSEY_CONTROL_RAMSIZE) ? 20 : 18;
+    if (ramsey_version == 0x0d) {
+        /* Ramsey-04 */
+        mem_width = (mem_control & RAMSEY_CONTROL_RAMWIDTH) ? 4 : 1;
+        skip_mode = 0;
+    } else {
+        /* Ramsey-07 */
+        skip_mode = !!(mem_control & RAMSEY_CONTROL_SKIP);
+        mem_width = 4;  // x1 RAM support removed, cycle skip mode added
+    }
+    bank_size  = BIT(mem_addrbits) * mem_width;
 
-    printf("Memory config: %sx%u (%uKB per bank) %s\n",
-           (mem_addrbits == 20) ? "1M" : "256", mem_width, bank_size >> 10,
-           (mem_control & RAMSEY_CONTROL_PAGE) ?
-                "Fast Page Mode (MSM514400, etc)" :
-           (mem_control & RAMSEY_CONTROL_BURST) ?
-                "Static Column (MSM514402, etc)" :
-            "Unknown type (PAGE and BURST are off)");
-    printf("Memory refresh: %s clocks (%s)\n",
-           ramsey_refresh_timing[mem_refresh].clocks,
-           ramsey_refresh_timing[mem_refresh].interval);
+    if (flag_info || !flag_quiet) {
+        ramsey_khz = get_ramsey_clock() + 5;  // round up
+        printf("Memory controller: Ramsey-0%d $%x $%02x (%u.%02u MHz)\n",
+                ramsey_rev, ramsey_version, get_ramsey_control(),
+                ramsey_khz / 1000, (ramsey_khz % 1000) / 10);
+        printf("Memory config: %sx%u (%u%cB per bank)",
+               (mem_addrbits == 20) ? "1M" : "256", mem_width,
+               (bank_size >> 20) ? (bank_size >> 20) : (bank_size >> 10),
+               (bank_size >> 20) ? 'M' : 'K');
 
-    if (!flag_addr_test && !flag_data_test && !flag_cell_test && !flag_strobe) {
+        if (mem_control & RAMSEY_CONTROL_PAGE) {
+            printf(" Page");
+            comma = 1;
+        }
+        if (mem_control & RAMSEY_CONTROL_BURST) {
+            if (comma++)
+                printf(",");
+            printf(" Burst");
+        }
+        if (mem_control & (RAMSEY_CONTROL_PAGE | RAMSEY_CONTROL_BURST)) {
+            printf(" (SCRAM required)");
+        }
+        if (mem_control & RAMSEY_CONTROL_WRAP) {
+            if (comma++)
+                printf(",");
+            printf(" Wrap");
+        }
+        if (skip_mode) {
+            /* Ramsey-07 offers Skip mode with 60ns RAM */
+            if (comma)
+                printf(",");
+            printf(" Skip");
+        }
+        printf("\nMemory refresh: %s clocks (%s)\n",
+               ramsey_refresh_timing[mem_refresh].clocks,
+               (ramsey_khz < 20000) ?
+               ramsey_refresh_timing[mem_refresh].interval_16m :
+               ramsey_refresh_timing[mem_refresh].interval_25m);
+    }
+
+    if (!flag_addr_test && !flag_data_test && !flag_cell_test &&
+        !flag_strobe && !flag_sprobe) {
         flag_addr_test = 1;
         flag_data_test = 1;
         flag_cell_test = 1;
+    }
+    if (flag_info) {
+        return (0);
     }
 
 #ifdef TEST_BANK_AMASK_TO_ADDRESS
@@ -1463,20 +2425,25 @@ c_main(int argc, char **argv)
         return (0);
     }
 
-    if (flag_data_test)
+    if (flag_data_test) {
+        printf("\n");
         rc = data_line_test(mem_addrbits, flags);
+    }
 
     if (flag_addr_test) {
-        if (flag_data_test)
-            printf("\n");
+        printf("\n");
         rc2 = address_line_test(mem_addrbits, flags);
         if (rc == 0)
             rc = rc2;
     }
 
+    if (flag_sprobe) {
+        printf("\n");
+        sc_memory_probe(mem_addrbits, flags);
+    }
+
     if (flag_cell_test) {
-        if (flag_data_test || flag_addr_test)
-            printf("\n");
+        printf("\n");
         rc2 = cell_data_test(bank_size, flags);
         if (rc == 0)
             rc = rc2;

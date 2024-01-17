@@ -5,7 +5,7 @@
 PROG=ziptest
 DIR=ZIPTest
 OBJDIR=objs
-SRCS=ziptest.c stack.asm
+SRCS=ziptest.c stack.asm util.asm
 OBJS=$(SRCS:"*.c":"$(OBJDIR)/*.o") $(SRCS:"*.asm":"$(OBJDIR)/*.o")
 CC=dcc
 ASM=das
@@ -25,7 +25,7 @@ LFLAGS=-O2 -chip -r -ms -mc -md
 #       -md    is small data model (default)
 #       -2.x   picks up AmigaOS 2.x headers
 #       -proto does stricter function prototype checking
-#       -//    will enable C++ style comments (not currently used)
+#       -//    will enable C++ style comments
 
 $(PROG): $(OBJS) DMakefile
 	$(CC) $(LFLAGS) %(right:*.o) -o %(left)
@@ -39,10 +39,13 @@ $(OBJDIR)/ziptest.o: ziptest.c $(OBJDIR) DMakefile
 $(OBJDIR)/stack.o: stack.asm DMakefile
 	$(ASM) %(right:*.asm) -o %(left)
 
+$(OBJDIR)/util.o: util.asm DMakefile
+	$(ASM) %(right:*.asm) -o %(left)
+
 clean:
 	delete $(PROG) $(OBJS) $(OBJDIR)
 
 release:
 	cd /
 	delete $(DIR)/$(DIR).lha
-	lha a -r $(DIR)/$(DIR).lha $(DIR)/$(PROG).readme $(DIR)/$(PROG) $(DIR)/ziptest.c $(DIR)/stack.asm $(DIR)/DMakefile $(DIR)/compile_vbcc $(DIR)/vbcc_config
+	lha a -o5 -r $(DIR)/$(DIR).lha $(DIR)/$(PROG).readme $(DIR)/$(PROG) $(DIR)/ziptest.c $(DIR)/stack.asm $(DIR)/util.asm $(DIR)/DMakefile $(DIR)/compile_vbcc $(DIR)/vbcc_config

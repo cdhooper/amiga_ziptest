@@ -1,5 +1,12 @@
-gcc -v -m68030 -resident -noixemul -O2 ziptest.c objs/stack.o -o ziptest -Xlinker -verbose -mregparm
+m68k-amigaos-gcc -m68030 -resident -noixemul -O2 ziptest.c objs/stack.o -o ziptest
+m68k-amigaos-gcc -v -m68030 -resident -noixemul -O2 ziptest.c objs/stack.o -o ziptest -Xlinker -verbose -mregparm
 
 ; Need a separate utility to mark code and data hunks as MEMF_CHIP.
 ; It appears gcc's linker can't do this natively.  I was unable to
 ; find such a utility on Aminet
+
+; 2023-05-26 gcc update
+; Apparently there are now section options like:
+;   .section .bsschip
+;   .section .datachip
+; Maybe one for text as well?
